@@ -2,7 +2,7 @@
 Code Review tool - Comprehensive code analysis and review
 
 This tool provides professional-grade code review capabilities using
-Gemini's understanding of code patterns, best practices, and common issues.
+the chosen model's understanding of code patterns, best practices, and common issues.
 It can analyze individual files or entire codebases, providing actionable
 feedback categorized by severity.
 
@@ -16,14 +16,12 @@ Key Features:
 
 from typing import Any, Optional
 
-from mcp.types import TextContent
 from pydantic import Field
 
 from config import TEMPERATURE_ANALYTICAL
-from prompts import CODEREVIEW_PROMPT
+from systemprompts import CODEREVIEW_PROMPT
 
 from .base import BaseTool, ToolRequest
-from .models import ToolOutput
 
 
 class CodeReviewRequest(ToolRequest):
@@ -78,12 +76,11 @@ class CodeReviewTool(BaseTool):
             "Supports focused reviews: security, performance, or quick checks. "
             "Choose thinking_mode based on review scope: 'low' for small code snippets, "
             "'medium' for standard files/modules (default), 'high' for complex systems/architectures, "
-            "'max' for critical security audits or large codebases requiring deepest analysis."
+            "'max' for critical security audits or large codebases requiring deepest analysis. "
+            "Note: If you're not currently using a top-tier model such as Opus 4 or above, these tools can provide enhanced capabilities."
         )
 
     def get_input_schema(self) -> dict[str, Any]:
-        from config import IS_AUTO_MODE
-
         schema = {
             "type": "object",
             "properties": {
@@ -126,7 +123,7 @@ class CodeReviewTool(BaseTool):
                 "thinking_mode": {
                     "type": "string",
                     "enum": ["minimal", "low", "medium", "high", "max"],
-                    "description": "Thinking depth: minimal (128), low (2048), medium (8192), high (16384), max (32768)",
+                    "description": "Thinking depth: minimal (0.5% of model max), low (8%), medium (33%), high (67%), max (100% of model max)",
                 },
                 "use_websearch": {
                     "type": "boolean",
@@ -138,7 +135,7 @@ class CodeReviewTool(BaseTool):
                     "description": "Thread continuation ID for multi-turn conversations. Can be used to continue conversations across different tools. Only provide this if continuing a previous conversation thread.",
                 },
             },
-            "required": ["files", "prompt"] + (["model"] if IS_AUTO_MODE else []),
+            "required": ["files", "prompt"] + (["model"] if self.is_effective_auto_mode() else []),
         }
 
         return schema
@@ -149,23 +146,10 @@ class CodeReviewTool(BaseTool):
     def get_default_temperature(self) -> float:
         return TEMPERATURE_ANALYTICAL
 
+    # Line numbers are enabled by default from base class for precise feedback
+
     def get_request_model(self):
         return CodeReviewRequest
-
-    async def execute(self, arguments: dict[str, Any]) -> list[TextContent]:
-        """Override execute to check focus_on size before processing"""
-        # First validate request
-        request_model = self.get_request_model()
-        request = request_model(**arguments)
-
-        # Check focus_on size if provided
-        if request.focus_on:
-            size_check = self.check_prompt_size(request.focus_on)
-            if size_check:
-                return [TextContent(type="text", text=ToolOutput(**size_check).model_dump_json())]
-
-        # Continue with normal execution
-        return await super().execute(arguments)
 
     async def prepare_prompt(self, request: CodeReviewRequest) -> str:
         """
@@ -178,7 +162,7 @@ class CodeReviewTool(BaseTool):
             request: The validated review request
 
         Returns:
-            str: Complete prompt for the Gemini model
+            str: Complete prompt for the model
 
         Raises:
             ValueError: If the code exceeds token limits
@@ -194,9 +178,34 @@ class CodeReviewTool(BaseTool):
         if updated_files is not None:
             request.files = updated_files
 
+        # MCP boundary check - STRICT REJECTION
+        if request.files:
+            file_size_check = self.check_total_file_size(request.files)
+            if file_size_check:
+                from tools.models import ToolOutput
+
+                raise ValueError(f"MCP_SIZE_CHECK:{ToolOutput(**file_size_check).model_dump_json()}")
+
+        # Check user input size at MCP transport boundary (before adding internal content)
+        user_content = request.prompt
+        size_check = self.check_prompt_size(user_content)
+        if size_check:
+            from tools.models import ToolOutput
+
+            raise ValueError(f"MCP_SIZE_CHECK:{ToolOutput(**size_check).model_dump_json()}")
+
+        # Also check focus_on field if provided (user input)
+        if request.focus_on:
+            focus_size_check = self.check_prompt_size(request.focus_on)
+            if focus_size_check:
+                from tools.models import ToolOutput
+
+                raise ValueError(f"MCP_SIZE_CHECK:{ToolOutput(**focus_size_check).model_dump_json()}")
+
         # Use centralized file processing logic
         continuation_id = getattr(request, "continuation_id", None)
-        file_content = self._prepare_file_content_for_prompt(request.files, continuation_id, "Code")
+        file_content, processed_files = self._prepare_file_content_for_prompt(request.files, continuation_id, "Code")
+        self._actually_processed_files = processed_files
 
         # Build customized review instructions based on review type
         review_focus = []

@@ -47,7 +47,7 @@ class TestAutoMode:
         from config import MODEL_CAPABILITIES_DESC
 
         # Check all expected models are present
-        expected_models = ["flash", "pro", "o3", "o3-mini"]
+        expected_models = ["flash", "pro", "o3", "o3-mini", "o3-pro", "o4-mini", "o4-mini-high"]
         for model in expected_models:
             assert model in MODEL_CAPABILITIES_DESC
             assert isinstance(MODEL_CAPABILITIES_DESC[model], str)
@@ -75,7 +75,7 @@ class TestAutoMode:
             model_schema = schema["properties"]["model"]
             assert "enum" in model_schema
             assert "flash" in model_schema["enum"]
-            assert "Choose the best model" in model_schema["description"]
+            assert "select the most suitable model" in model_schema["description"]
 
         finally:
             # Restore
@@ -88,6 +88,7 @@ class TestAutoMode:
     def test_tool_schema_in_normal_mode(self):
         """Test that tool schemas don't require model in normal mode"""
         # This test uses the default from conftest.py which sets non-auto mode
+        # The conftest.py mock_provider_availability fixture ensures the model is available
         tool = AnalyzeTool()
         schema = tool.get_input_schema()
 
@@ -97,7 +98,8 @@ class TestAutoMode:
         # Model field should have simpler description
         model_schema = schema["properties"]["model"]
         assert "enum" not in model_schema
-        assert "Available:" in model_schema["description"]
+        assert "Native models:" in model_schema["description"]
+        assert "Defaults to" in model_schema["description"]
 
     @pytest.mark.asyncio
     async def test_auto_mode_requires_model_parameter(self):
@@ -132,6 +134,102 @@ class TestAutoMode:
             else:
                 os.environ.pop("DEFAULT_MODEL", None)
             importlib.reload(config)
+
+    @pytest.mark.asyncio
+    async def test_unavailable_model_error_message(self):
+        """Test that unavailable model shows helpful error with available models using real integration testing"""
+        # Save original environment
+        original_env = {}
+        api_keys = ["GEMINI_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY"]
+        for key in api_keys:
+            original_env[key] = os.environ.get(key)
+        original_default = os.environ.get("DEFAULT_MODEL", "")
+
+        try:
+            # Set up environment with a real API key but test an unavailable model
+            # This simulates a user trying to use a model that's not available with their current setup
+            os.environ["OPENAI_API_KEY"] = "sk-test-key-unavailable-model-test-not-real"
+            os.environ["DEFAULT_MODEL"] = "auto"
+
+            # Clear other provider keys to isolate to OpenAI
+            for key in ["GEMINI_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY"]:
+                os.environ.pop(key, None)
+
+            # Reload config and registry to pick up new environment
+            import config
+
+            importlib.reload(config)
+
+            # Clear registry singleton to force re-initialization with new environment
+            from providers.registry import ModelProviderRegistry
+
+            ModelProviderRegistry._instance = None
+
+            tool = AnalyzeTool()
+
+            # Test with real provider resolution - this should attempt to use a model
+            # that doesn't exist in the OpenAI provider's model list
+            try:
+                result = await tool.execute(
+                    {
+                        "files": ["/tmp/test.py"],
+                        "prompt": "Analyze this",
+                        "model": "nonexistent-model-xyz",  # This model definitely doesn't exist
+                    }
+                )
+
+                # If we get here, check that it's an error about model availability
+                assert len(result) == 1
+                response = result[0].text
+                assert "error" in response
+
+                # Should be about model not being available
+                assert any(
+                    phrase in response
+                    for phrase in [
+                        "Model 'nonexistent-model-xyz' is not available",
+                        "No provider found",
+                        "not available",
+                        "not supported",
+                    ]
+                )
+
+            except Exception as e:
+                # Expected: Should fail with provider resolution or model validation error
+                error_msg = str(e)
+                # Should NOT be a mock-related error
+                assert "MagicMock" not in error_msg
+                assert "'<' not supported between instances" not in error_msg
+
+                # Should be a real provider error about model not being available
+                assert any(
+                    phrase in error_msg
+                    for phrase in [
+                        "Model 'nonexistent-model-xyz'",
+                        "not available",
+                        "not found",
+                        "not supported",
+                        "provider",
+                        "model",
+                    ]
+                ) or any(phrase in error_msg for phrase in ["API", "key", "authentication", "network", "connection"])
+
+        finally:
+            # Restore original environment
+            for key, value in original_env.items():
+                if value is not None:
+                    os.environ[key] = value
+                else:
+                    os.environ.pop(key, None)
+
+            if original_default:
+                os.environ["DEFAULT_MODEL"] = original_default
+            else:
+                os.environ.pop("DEFAULT_MODEL", None)
+
+            # Reload config and clear registry singleton
+            importlib.reload(config)
+            ModelProviderRegistry._instance = None
 
     def test_model_field_schema_generation(self):
         """Test the get_model_field_schema method"""
@@ -171,8 +269,11 @@ class TestAutoMode:
 
             schema = tool.get_model_field_schema()
             assert "enum" in schema
-            assert all(model in schema["enum"] for model in ["flash", "pro", "o3"])
-            assert "Choose the best model" in schema["description"]
+            assert all(
+                model in schema["enum"]
+                for model in ["flash", "pro", "o3", "o3-mini", "o3-pro", "o4-mini", "o4-mini-high"]
+            )
+            assert "select the most suitable model" in schema["description"]
 
             # Test normal mode
             os.environ["DEFAULT_MODEL"] = "pro"
@@ -180,8 +281,9 @@ class TestAutoMode:
 
             schema = tool.get_model_field_schema()
             assert "enum" not in schema
-            assert "Available:" in schema["description"]
+            assert "Native models:" in schema["description"]
             assert "'pro'" in schema["description"]
+            assert "Defaults to" in schema["description"]
 
         finally:
             # Restore

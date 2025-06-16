@@ -3,6 +3,8 @@
 import os
 from unittest.mock import Mock, patch
 
+import pytest
+
 from providers import ModelProviderRegistry, ModelResponse
 from providers.base import ProviderType
 from providers.gemini import GeminiModelProvider
@@ -14,15 +16,27 @@ class TestModelProviderRegistry:
 
     def setup_method(self):
         """Clear registry before each test"""
-        ModelProviderRegistry._providers.clear()
-        ModelProviderRegistry._initialized_providers.clear()
+        # Store the original providers to restore them later
+        registry = ModelProviderRegistry()
+        self._original_providers = registry._providers.copy()
+        registry._providers.clear()
+        registry._initialized_providers.clear()
+
+    def teardown_method(self):
+        """Restore original providers after each test"""
+        # Restore the original providers that were registered in conftest.py
+        registry = ModelProviderRegistry()
+        registry._providers.clear()
+        registry._initialized_providers.clear()
+        registry._providers.update(self._original_providers)
 
     def test_register_provider(self):
         """Test registering a provider"""
         ModelProviderRegistry.register_provider(ProviderType.GOOGLE, GeminiModelProvider)
 
-        assert ProviderType.GOOGLE in ModelProviderRegistry._providers
-        assert ModelProviderRegistry._providers[ProviderType.GOOGLE] == GeminiModelProvider
+        registry = ModelProviderRegistry()
+        assert ProviderType.GOOGLE in registry._providers
+        assert registry._providers[ProviderType.GOOGLE] == GeminiModelProvider
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
     def test_get_provider(self):
@@ -45,11 +59,12 @@ class TestModelProviderRegistry:
         assert provider is None
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
+    @pytest.mark.no_mock_provider
     def test_get_provider_for_model(self):
         """Test getting provider for a specific model"""
         ModelProviderRegistry.register_provider(ProviderType.GOOGLE, GeminiModelProvider)
 
-        provider = ModelProviderRegistry.get_provider_for_model("gemini-2.0-flash")
+        provider = ModelProviderRegistry.get_provider_for_model("gemini-2.5-flash-preview-05-20")
 
         assert provider is not None
         assert isinstance(provider, GeminiModelProvider)
@@ -80,12 +95,12 @@ class TestGeminiProvider:
         """Test getting model capabilities"""
         provider = GeminiModelProvider(api_key="test-key")
 
-        capabilities = provider.get_capabilities("gemini-2.0-flash")
+        capabilities = provider.get_capabilities("gemini-2.5-flash-preview-05-20")
 
         assert capabilities.provider == ProviderType.GOOGLE
-        assert capabilities.model_name == "gemini-2.0-flash"
-        assert capabilities.max_tokens == 1_048_576
-        assert not capabilities.supports_extended_thinking
+        assert capabilities.model_name == "gemini-2.5-flash-preview-05-20"
+        assert capabilities.context_window == 1_048_576
+        assert capabilities.supports_extended_thinking
 
     def test_get_capabilities_pro_model(self):
         """Test getting capabilities for Pro model with thinking support"""
@@ -103,13 +118,13 @@ class TestGeminiProvider:
         assert provider.validate_model_name("pro")
 
         capabilities = provider.get_capabilities("flash")
-        assert capabilities.model_name == "gemini-2.0-flash"
+        assert capabilities.model_name == "gemini-2.5-flash-preview-05-20"
 
     def test_supports_thinking_mode(self):
         """Test thinking mode support detection"""
         provider = GeminiModelProvider(api_key="test-key")
 
-        assert not provider.supports_thinking_mode("gemini-2.0-flash")
+        assert provider.supports_thinking_mode("gemini-2.5-flash-preview-05-20")
         assert provider.supports_thinking_mode("gemini-2.5-pro-preview-06-05")
 
     @patch("google.genai.Client")
@@ -133,11 +148,13 @@ class TestGeminiProvider:
 
         provider = GeminiModelProvider(api_key="test-key")
 
-        response = provider.generate_content(prompt="Test prompt", model_name="gemini-2.0-flash", temperature=0.7)
+        response = provider.generate_content(
+            prompt="Test prompt", model_name="gemini-2.5-flash-preview-05-20", temperature=0.7
+        )
 
         assert isinstance(response, ModelResponse)
         assert response.content == "Generated content"
-        assert response.model_name == "gemini-2.0-flash"
+        assert response.model_name == "gemini-2.5-flash-preview-05-20"
         assert response.provider == ProviderType.GOOGLE
         assert response.usage["input_tokens"] == 10
         assert response.usage["output_tokens"] == 20
@@ -146,6 +163,18 @@ class TestGeminiProvider:
 
 class TestOpenAIProvider:
     """Test OpenAI model provider"""
+
+    def setup_method(self):
+        """Clear restriction service cache before each test"""
+        import utils.model_restrictions
+
+        utils.model_restrictions._restriction_service = None
+
+    def teardown_method(self):
+        """Clear restriction service cache after each test"""
+        import utils.model_restrictions
+
+        utils.model_restrictions._restriction_service = None
 
     def test_provider_initialization(self):
         """Test provider initialization"""
@@ -163,15 +192,34 @@ class TestOpenAIProvider:
 
         assert capabilities.provider == ProviderType.OPENAI
         assert capabilities.model_name == "o3-mini"
-        assert capabilities.max_tokens == 200_000
+        assert capabilities.context_window == 200_000
         assert not capabilities.supports_extended_thinking
+
+    def test_get_capabilities_o4_mini(self):
+        """Test getting O4-mini model capabilities"""
+        provider = OpenAIModelProvider(api_key="test-key")
+
+        capabilities = provider.get_capabilities("o4-mini")
+
+        assert capabilities.provider == ProviderType.OPENAI
+        assert capabilities.model_name == "o4-mini"
+        assert capabilities.context_window == 200_000
+        assert not capabilities.supports_extended_thinking
+        # Check temperature constraint is fixed at 1.0
+        assert capabilities.temperature_constraint.value == 1.0
 
     def test_validate_model_names(self):
         """Test model name validation"""
         provider = OpenAIModelProvider(api_key="test-key")
 
         assert provider.validate_model_name("o3")
-        assert provider.validate_model_name("o3-mini")
+        assert provider.validate_model_name("o3mini")
+        assert provider.validate_model_name("o3-mini")  # Backwards compatibility
+        assert provider.validate_model_name("o4-mini")
+        assert provider.validate_model_name("o4mini")
+        assert provider.validate_model_name("o4-mini-high")
+        assert provider.validate_model_name("o4minihigh")
+        assert provider.validate_model_name("o4minihi")
         assert not provider.validate_model_name("gpt-4o")
         assert not provider.validate_model_name("invalid-model")
 
@@ -180,4 +228,7 @@ class TestOpenAIProvider:
         provider = OpenAIModelProvider(api_key="test-key")
 
         assert not provider.supports_thinking_mode("o3")
+        assert not provider.supports_thinking_mode("o3mini")
         assert not provider.supports_thinking_mode("o3-mini")
+        assert not provider.supports_thinking_mode("o4-mini")
+        assert not provider.supports_thinking_mode("o4-mini-high")

@@ -2,23 +2,29 @@
 ThinkDeep tool - Extended reasoning and problem-solving
 """
 
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-from mcp.types import TextContent
 from pydantic import Field
 
+if TYPE_CHECKING:
+    from tools.models import ToolModelCategory
+
 from config import TEMPERATURE_CREATIVE
-from prompts import THINKDEEP_PROMPT
+from systemprompts import THINKDEEP_PROMPT
 
 from .base import BaseTool, ToolRequest
-from .models import ToolOutput
 
 
 class ThinkDeepRequest(ToolRequest):
     """Request model for thinkdeep tool"""
 
-    prompt: str = Field(..., description="Your current thinking/analysis to extend and validate")
-    problem_context: Optional[str] = Field(None, description="Additional context about the problem or goal")
+    prompt: str = Field(
+        ...,
+        description="Your current thinking/analysis to extend and validate. IMPORTANT: Before using this tool, Claude MUST first think hard and establish a deep understanding of the topic and question by thinking through all relevant details, context, constraints, and implications. Share these extended thoughts and ideas in the prompt so the model has comprehensive information to work with for the best analysis.",
+    )
+    problem_context: Optional[str] = Field(
+        None, description="Additional context about the problem or goal. Be as expressive as possible."
+    )
     focus_areas: Optional[list[str]] = Field(
         None,
         description="Specific aspects to focus on (architecture, performance, security, etc.)",
@@ -44,23 +50,22 @@ class ThinkDeepTool(BaseTool):
             "IMPORTANT: Choose the appropriate thinking_mode based on task complexity - "
             "'low' for quick analysis, 'medium' for standard problems, 'high' for complex issues (default), "
             "'max' for extremely complex challenges requiring deepest analysis. "
-            "When in doubt, err on the side of a higher mode for truly deep thought and evaluation."
+            "When in doubt, err on the side of a higher mode for truly deep thought and evaluation. "
+            "Note: If you're not currently using a top-tier model such as Opus 4 or above, these tools can provide enhanced capabilities."
         )
 
     def get_input_schema(self) -> dict[str, Any]:
-        from config import IS_AUTO_MODE
-
         schema = {
             "type": "object",
             "properties": {
                 "prompt": {
                     "type": "string",
-                    "description": "Your current thinking/analysis to extend and validate",
+                    "description": "Your current thinking/analysis to extend and validate. IMPORTANT: Before using this tool, Claude MUST first think deeply and establish a deep understanding of the topic and question by thinking through all relevant details, context, constraints, and implications. Share these extended thoughts and ideas in the prompt so the model has comprehensive information to work with for the best analysis.",
                 },
                 "model": self.get_model_field_schema(),
                 "problem_context": {
                     "type": "string",
-                    "description": "Additional context about the problem or goal",
+                    "description": "Additional context about the problem or goal. Be as expressive as possible.",
                 },
                 "focus_areas": {
                     "type": "array",
@@ -81,7 +86,7 @@ class ThinkDeepTool(BaseTool):
                 "thinking_mode": {
                     "type": "string",
                     "enum": ["minimal", "low", "medium", "high", "max"],
-                    "description": f"Thinking depth: minimal (128), low (2048), medium (8192), high (16384), max (32768). Defaults to '{self.get_default_thinking_mode()}' if not specified.",
+                    "description": f"Thinking depth: minimal (0.5% of model max), low (8%), medium (33%), high (67%), max (100% of model max). Defaults to '{self.get_default_thinking_mode()}' if not specified.",
                 },
                 "use_websearch": {
                     "type": "boolean",
@@ -93,7 +98,7 @@ class ThinkDeepTool(BaseTool):
                     "description": "Thread continuation ID for multi-turn conversations. Can be used to continue conversations across different tools. Only provide this if continuing a previous conversation thread.",
                 },
             },
-            "required": ["prompt"] + (["model"] if IS_AUTO_MODE else []),
+            "required": ["prompt"] + (["model"] if self.is_effective_auto_mode() else []),
         }
 
         return schema
@@ -110,22 +115,14 @@ class ThinkDeepTool(BaseTool):
 
         return DEFAULT_THINKING_MODE_THINKDEEP
 
+    def get_model_category(self) -> "ToolModelCategory":
+        """ThinkDeep requires extended reasoning capabilities"""
+        from tools.models import ToolModelCategory
+
+        return ToolModelCategory.EXTENDED_REASONING
+
     def get_request_model(self):
         return ThinkDeepRequest
-
-    async def execute(self, arguments: dict[str, Any]) -> list[TextContent]:
-        """Override execute to check current_analysis size before processing"""
-        # First validate request
-        request_model = self.get_request_model()
-        request = request_model(**arguments)
-
-        # Check prompt size
-        size_check = self.check_prompt_size(request.prompt)
-        if size_check:
-            return [TextContent(type="text", text=ToolOutput(**size_check).model_dump_json())]
-
-        # Continue with normal execution
-        return await super().execute(arguments)
 
     async def prepare_prompt(self, request: ThinkDeepRequest) -> str:
         """Prepare the full prompt for extended thinking"""
@@ -135,9 +132,24 @@ class ThinkDeepTool(BaseTool):
         # Use prompt.txt content if available, otherwise use the prompt field
         current_analysis = prompt_content if prompt_content else request.prompt
 
+        # Check user input size at MCP transport boundary (before adding internal content)
+        size_check = self.check_prompt_size(current_analysis)
+        if size_check:
+            from tools.models import ToolOutput
+
+            raise ValueError(f"MCP_SIZE_CHECK:{ToolOutput(**size_check).model_dump_json()}")
+
         # Update request files list
         if updated_files is not None:
             request.files = updated_files
+
+        # MCP boundary check - STRICT REJECTION
+        if request.files:
+            file_size_check = self.check_total_file_size(request.files)
+            if file_size_check:
+                from tools.models import ToolOutput
+
+                raise ValueError(f"MCP_SIZE_CHECK:{ToolOutput(**file_size_check).model_dump_json()}")
 
         # Build context parts
         context_parts = [f"=== CLAUDE'S CURRENT ANALYSIS ===\n{current_analysis}\n=== END ANALYSIS ==="]
@@ -149,7 +161,10 @@ class ThinkDeepTool(BaseTool):
         if request.files:
             # Use centralized file processing logic
             continuation_id = getattr(request, "continuation_id", None)
-            file_content = self._prepare_file_content_for_prompt(request.files, continuation_id, "Reference files")
+            file_content, processed_files = self._prepare_file_content_for_prompt(
+                request.files, continuation_id, "Reference files"
+            )
+            self._actually_processed_files = processed_files
 
             if file_content:
                 context_parts.append(f"\n=== REFERENCE FILES ===\n{file_content}\n=== END FILES ===")
@@ -207,6 +222,8 @@ Claude, please critically evaluate {model_name}'s analysis by thinking hard abou
 1. **Technical merit** - Which suggestions are valuable vs. have limitations?
 2. **Constraints** - Fit with codebase patterns, performance, security, architecture
 3. **Risks** - Hidden complexities, edge cases, potential failure modes
-4. **Final recommendation** - Synthesize both perspectives, then think deeply further to explore additional considerations and arrive at the best technical solution
+4. **Final recommendation** - Synthesize both perspectives, then ultrathink on your own to explore additional
+considerations and arrive at the best technical solution. Feel free to use zen's chat tool for a follow-up discussion
+if needed.
 
 Remember: Use {model_name}'s insights to enhance, not replace, your analysis."""

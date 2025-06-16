@@ -1,5 +1,7 @@
 """Gemini model provider implementation."""
 
+import logging
+import time
 from typing import Optional
 
 from google import genai
@@ -7,32 +9,37 @@ from google.genai import types
 
 from .base import ModelCapabilities, ModelProvider, ModelResponse, ProviderType, RangeTemperatureConstraint
 
+logger = logging.getLogger(__name__)
+
 
 class GeminiModelProvider(ModelProvider):
     """Google Gemini model provider implementation."""
 
     # Model configurations
     SUPPORTED_MODELS = {
-        "gemini-2.0-flash": {
-            "max_tokens": 1_048_576,  # 1M tokens
-            "supports_extended_thinking": False,
+        "gemini-2.5-flash-preview-05-20": {
+            "context_window": 1_048_576,  # 1M tokens
+            "supports_extended_thinking": True,
+            "max_thinking_tokens": 24576,  # Flash 2.5 thinking budget limit
         },
         "gemini-2.5-pro-preview-06-05": {
-            "max_tokens": 1_048_576,  # 1M tokens
+            "context_window": 1_048_576,  # 1M tokens
             "supports_extended_thinking": True,
+            "max_thinking_tokens": 32768,  # Pro 2.5 thinking budget limit
         },
         # Shorthands
-        "flash": "gemini-2.0-flash",
+        "flash": "gemini-2.5-flash-preview-05-20",
         "pro": "gemini-2.5-pro-preview-06-05",
     }
 
-    # Thinking mode configurations for models that support it
+    # Thinking mode configurations - percentages of model's max_thinking_tokens
+    # These percentages work across all models that support thinking
     THINKING_BUDGETS = {
-        "minimal": 128,  # Minimum for 2.5 Pro - fast responses
-        "low": 2048,  # Light reasoning tasks
-        "medium": 8192,  # Balanced reasoning (default)
-        "high": 16384,  # Complex analysis
-        "max": 32768,  # Maximum reasoning depth
+        "minimal": 0.005,  # 0.5% of max - minimal thinking for fast responses
+        "low": 0.08,  # 8% of max - light reasoning tasks
+        "medium": 0.33,  # 33% of max - balanced reasoning (default)
+        "high": 0.67,  # 67% of max - complex analysis
+        "max": 1.0,  # 100% of max - full thinking budget
     }
 
     def __init__(self, api_key: str, **kwargs):
@@ -56,6 +63,13 @@ class GeminiModelProvider(ModelProvider):
         if resolved_name not in self.SUPPORTED_MODELS:
             raise ValueError(f"Unsupported Gemini model: {model_name}")
 
+        # Check if model is allowed by restrictions
+        from utils.model_restrictions import get_restriction_service
+
+        restriction_service = get_restriction_service()
+        if not restriction_service.is_allowed(ProviderType.GOOGLE, resolved_name, model_name):
+            raise ValueError(f"Gemini model '{model_name}' is not allowed by restriction policy.")
+
         config = self.SUPPORTED_MODELS[resolved_name]
 
         # Gemini models support 0.0-2.0 temperature range
@@ -65,7 +79,7 @@ class GeminiModelProvider(ModelProvider):
             provider=ProviderType.GOOGLE,
             model_name=resolved_name,
             friendly_name="Gemini",
-            max_tokens=config["max_tokens"],
+            context_window=config["context_window"],
             supports_extended_thinking=config["supports_extended_thinking"],
             supports_system_prompts=True,
             supports_streaming=True,
@@ -107,39 +121,81 @@ class GeminiModelProvider(ModelProvider):
         # Add thinking configuration for models that support it
         capabilities = self.get_capabilities(resolved_name)
         if capabilities.supports_extended_thinking and thinking_mode in self.THINKING_BUDGETS:
-            generation_config.thinking_config = types.ThinkingConfig(
-                thinking_budget=self.THINKING_BUDGETS[thinking_mode]
-            )
+            # Get model's max thinking tokens and calculate actual budget
+            model_config = self.SUPPORTED_MODELS.get(resolved_name)
+            if model_config and "max_thinking_tokens" in model_config:
+                max_thinking_tokens = model_config["max_thinking_tokens"]
+                actual_thinking_budget = int(max_thinking_tokens * self.THINKING_BUDGETS[thinking_mode])
+                generation_config.thinking_config = types.ThinkingConfig(thinking_budget=actual_thinking_budget)
 
-        try:
-            # Generate content
-            response = self.client.models.generate_content(
-                model=resolved_name,
-                contents=full_prompt,
-                config=generation_config,
-            )
+        # Retry logic with exponential backoff
+        max_retries = 2  # Total of 2 attempts (1 initial + 1 retry)
+        base_delay = 1.0  # Start with 1 second delay
 
-            # Extract usage information if available
-            usage = self._extract_usage(response)
+        last_exception = None
 
-            return ModelResponse(
-                content=response.text,
-                usage=usage,
-                model_name=resolved_name,
-                friendly_name="Gemini",
-                provider=ProviderType.GOOGLE,
-                metadata={
-                    "thinking_mode": thinking_mode if capabilities.supports_extended_thinking else None,
-                    "finish_reason": (
-                        getattr(response.candidates[0], "finish_reason", "STOP") if response.candidates else "STOP"
-                    ),
-                },
-            )
+        for attempt in range(max_retries):
+            try:
+                # Generate content
+                response = self.client.models.generate_content(
+                    model=resolved_name,
+                    contents=full_prompt,
+                    config=generation_config,
+                )
 
-        except Exception as e:
-            # Log error and re-raise with more context
-            error_msg = f"Gemini API error for model {resolved_name}: {str(e)}"
-            raise RuntimeError(error_msg) from e
+                # Extract usage information if available
+                usage = self._extract_usage(response)
+
+                return ModelResponse(
+                    content=response.text,
+                    usage=usage,
+                    model_name=resolved_name,
+                    friendly_name="Gemini",
+                    provider=ProviderType.GOOGLE,
+                    metadata={
+                        "thinking_mode": thinking_mode if capabilities.supports_extended_thinking else None,
+                        "finish_reason": (
+                            getattr(response.candidates[0], "finish_reason", "STOP") if response.candidates else "STOP"
+                        ),
+                    },
+                )
+
+            except Exception as e:
+                last_exception = e
+
+                # Check if this is a retryable error
+                error_str = str(e).lower()
+                is_retryable = any(
+                    term in error_str
+                    for term in [
+                        "timeout",
+                        "connection",
+                        "network",
+                        "temporary",
+                        "unavailable",
+                        "retry",
+                        "429",
+                        "500",
+                        "502",
+                        "503",
+                        "504",
+                    ]
+                )
+
+                # If this is the last attempt or not retryable, give up
+                if attempt == max_retries - 1 or not is_retryable:
+                    break
+
+                # Calculate delay with exponential backoff
+                delay = base_delay * (2**attempt)
+
+                # Log retry attempt (could add logging here if needed)
+                # For now, just sleep and retry
+                time.sleep(delay)
+
+        # If we get here, all retries failed
+        error_msg = f"Gemini API error for model {resolved_name} after {max_retries} attempts: {str(last_exception)}"
+        raise RuntimeError(error_msg) from last_exception
 
     def count_tokens(self, text: str, model_name: str) -> int:
         """Count tokens for the given text using Gemini's tokenizer."""
@@ -155,14 +211,44 @@ class GeminiModelProvider(ModelProvider):
         return ProviderType.GOOGLE
 
     def validate_model_name(self, model_name: str) -> bool:
-        """Validate if the model name is supported."""
+        """Validate if the model name is supported and allowed."""
         resolved_name = self._resolve_model_name(model_name)
-        return resolved_name in self.SUPPORTED_MODELS and isinstance(self.SUPPORTED_MODELS[resolved_name], dict)
+
+        # First check if model is supported
+        if resolved_name not in self.SUPPORTED_MODELS or not isinstance(self.SUPPORTED_MODELS[resolved_name], dict):
+            return False
+
+        # Then check if model is allowed by restrictions
+        from utils.model_restrictions import get_restriction_service
+
+        restriction_service = get_restriction_service()
+        if not restriction_service.is_allowed(ProviderType.GOOGLE, resolved_name, model_name):
+            logger.debug(f"Gemini model '{model_name}' -> '{resolved_name}' blocked by restrictions")
+            return False
+
+        return True
 
     def supports_thinking_mode(self, model_name: str) -> bool:
         """Check if the model supports extended thinking mode."""
         capabilities = self.get_capabilities(model_name)
         return capabilities.supports_extended_thinking
+
+    def get_thinking_budget(self, model_name: str, thinking_mode: str) -> int:
+        """Get actual thinking token budget for a model and thinking mode."""
+        resolved_name = self._resolve_model_name(model_name)
+        model_config = self.SUPPORTED_MODELS.get(resolved_name, {})
+
+        if not model_config.get("supports_extended_thinking", False):
+            return 0
+
+        if thinking_mode not in self.THINKING_BUDGETS:
+            return 0
+
+        max_thinking_tokens = model_config.get("max_thinking_tokens", 0)
+        if max_thinking_tokens == 0:
+            return 0
+
+        return int(max_thinking_tokens * self.THINKING_BUDGETS[thinking_mode])
 
     def _resolve_model_name(self, model_name: str) -> str:
         """Resolve model shorthand to full name."""

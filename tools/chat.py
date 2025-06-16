@@ -2,16 +2,17 @@
 Chat tool - General development chat and collaborative thinking
 """
 
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-from mcp.types import TextContent
 from pydantic import Field
 
+if TYPE_CHECKING:
+    from tools.models import ToolModelCategory
+
 from config import TEMPERATURE_BALANCED
-from prompts import CHAT_PROMPT
+from systemprompts import CHAT_PROMPT
 
 from .base import BaseTool, ToolRequest
-from .models import ToolOutput
 
 
 class ChatRequest(ToolRequest):
@@ -40,12 +41,11 @@ class ChatTool(BaseTool):
             "collaborative brainstorming, validating your checklists and approaches, exploring alternatives. "
             "Also great for: explanations, comparisons, general development questions. "
             "Use this when you want to ask questions, brainstorm ideas, get opinions, discuss topics, "
-            "share your thinking, or need explanations about concepts and approaches."
+            "share your thinking, or need explanations about concepts and approaches. "
+            "Note: If you're not currently using a top-tier model such as Opus 4 or above, these tools can provide enhanced capabilities."
         )
 
     def get_input_schema(self) -> dict[str, Any]:
-        from config import IS_AUTO_MODE
-
         schema = {
             "type": "object",
             "properties": {
@@ -68,7 +68,7 @@ class ChatTool(BaseTool):
                 "thinking_mode": {
                     "type": "string",
                     "enum": ["minimal", "low", "medium", "high", "max"],
-                    "description": "Thinking depth: minimal (128), low (2048), medium (8192), high (16384), max (32768)",
+                    "description": "Thinking depth: minimal (0.5% of model max), low (8%), medium (33%), high (67%), max (100% of model max)",
                 },
                 "use_websearch": {
                     "type": "boolean",
@@ -80,7 +80,7 @@ class ChatTool(BaseTool):
                     "description": "Thread continuation ID for multi-turn conversations. Can be used to continue conversations across different tools. Only provide this if continuing a previous conversation thread.",
                 },
             },
-            "required": ["prompt"] + (["model"] if IS_AUTO_MODE else []),
+            "required": ["prompt"] + (["model"] if self.is_effective_auto_mode() else []),
         }
 
         return schema
@@ -91,22 +91,14 @@ class ChatTool(BaseTool):
     def get_default_temperature(self) -> float:
         return TEMPERATURE_BALANCED
 
+    def get_model_category(self) -> "ToolModelCategory":
+        """Chat prioritizes fast responses and cost efficiency"""
+        from tools.models import ToolModelCategory
+
+        return ToolModelCategory.FAST_RESPONSE
+
     def get_request_model(self):
         return ChatRequest
-
-    async def execute(self, arguments: dict[str, Any]) -> list[TextContent]:
-        """Override execute to check prompt size before processing"""
-        # First validate request
-        request_model = self.get_request_model()
-        request = request_model(**arguments)
-
-        # Check prompt size
-        size_check = self.check_prompt_size(request.prompt)
-        if size_check:
-            return [TextContent(type="text", text=ToolOutput(**size_check).model_dump_json())]
-
-        # Continue with normal execution
-        return await super().execute(arguments)
 
     async def prepare_prompt(self, request: ChatRequest) -> str:
         """Prepare the chat prompt with optional context files"""
@@ -116,15 +108,26 @@ class ChatTool(BaseTool):
         # Use prompt.txt content if available, otherwise use the prompt field
         user_content = prompt_content if prompt_content else request.prompt
 
+        # Check user input size at MCP transport boundary (before adding internal content)
+        size_check = self.check_prompt_size(user_content)
+        if size_check:
+            # Need to return error, but prepare_prompt returns str
+            # Use exception to handle this cleanly
+
+            from tools.models import ToolOutput
+
+            raise ValueError(f"MCP_SIZE_CHECK:{ToolOutput(**size_check).model_dump_json()}")
+
         # Update request files list
         if updated_files is not None:
             request.files = updated_files
 
         # Add context files if provided (using centralized file handling with filtering)
         if request.files:
-            file_content = self._prepare_file_content_for_prompt(
+            file_content, processed_files = self._prepare_file_content_for_prompt(
                 request.files, request.continuation_id, "Context files"
             )
+            self._actually_processed_files = processed_files
             if file_content:
                 user_content = f"{user_content}\n\n=== CONTEXT FILES ===\n{file_content}\n=== END CONTEXT ===="
 

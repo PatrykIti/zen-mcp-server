@@ -98,6 +98,10 @@ class ConversationChainValidationTest(BaseSimulatorTest):
     '''Simple test function for conversation continuity testing'''
     return "Hello from conversation chain test"
 
+def buggy_function(x, y):
+    '''Function with a bug - incorrect operator'''
+    return x - y  # BUG: Should be x + y for addition
+
 class TestClass:
     def method(self):
         return "Method in test class"
@@ -223,7 +227,8 @@ class TestClass:
             response_a1_branch, continuation_id_a1_branch = self.call_mcp_tool(
                 "debug",
                 {
-                    "prompt": "Let's debug this from a different angle now.",
+                    "prompt": "buggy_function(5, 3) returns 2 but should return 8 for addition",
+                    "error_context": "Unit test failure: expected buggy_function(5, 3) to return 8 (5+3) but got 2. Function appears to be subtracting instead of adding.",
                     "files": [test_file_path],
                     "continuation_id": continuation_id_a1,  # Go back to original!
                     "model": "flash",
@@ -310,23 +315,27 @@ class TestClass:
                     is_valid_length = chain_length >= 2
 
                     # Try to identify which thread this is for better validation
-                    thread_description = "Unknown thread"
-                    if thread_id == continuation_id_a2:
-                        thread_description = "A2 (should be 2-thread chain)"
+                    thread_description = f"Thread {thread_id[:8]}"
+                    if thread_id == continuation_id_a1:
+                        thread_description = "A1 (original thread)"
+                        is_valid_length = chain_length == 1
+                    elif thread_id == continuation_id_a2:
+                        thread_description = "A2 (2-thread chain)"
                         is_valid_length = chain_length == 2
                     elif thread_id == continuation_id_a3:
-                        thread_description = "A3 (should be 3-thread chain)"
+                        thread_description = "A3 (3-thread chain)"
                         is_valid_length = chain_length == 3
+                    elif thread_id == continuation_id_b1:
+                        thread_description = "B1 (original thread)"
+                        is_valid_length = chain_length == 1
                     elif thread_id == continuation_id_b2:
-                        thread_description = "B2 (should be 2-thread chain)"
+                        thread_description = "B2 (2-thread chain)"
                         is_valid_length = chain_length == 2
                     elif thread_id == continuation_id_a1_branch:
-                        thread_description = "A1-Branch (should be 2-thread chain)"
+                        thread_description = "A1-Branch (2-thread chain)"
                         is_valid_length = chain_length == 2
 
-                    traversal_validations.append(
-                        (f"{thread_description[:8]}... has valid chain length", is_valid_length)
-                    )
+                    traversal_validations.append((f"{thread_description} has valid chain length", is_valid_length))
 
                 # Also validate we found at least one traversal (shows the system is working)
                 traversal_validations.append(
