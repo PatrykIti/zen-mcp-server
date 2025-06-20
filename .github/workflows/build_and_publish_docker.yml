@@ -98,13 +98,10 @@ jobs:
         echo "      \"command\": \"docker\"," >> $GITHUB_STEP_SUMMARY
         echo "      \"args\": [" >> $GITHUB_STEP_SUMMARY
         echo "        \"run\", \"--rm\", \"-i\"," >> $GITHUB_STEP_SUMMARY
-        echo "        \"-e\", \"GEMINI_API_KEY\"," >> $GITHUB_STEP_SUMMARY
-        echo "        \"-v\", \"\${HOME}:\${HOME}\"," >> $GITHUB_STEP_SUMMARY
+        echo "        \"-e\", \"GEMINI_API_KEY=<your_api_key_from_google_ai_studio>\"," >> $GITHUB_STEP_SUMMARY
+        echo "        \"-v\", \"<path_to_your_workspace>:<path_to_your_workspace>\"," >> $GITHUB_STEP_SUMMARY
         echo "        \"$MAIN_TAG\"" >> $GITHUB_STEP_SUMMARY
-        echo "      ]," >> $GITHUB_STEP_SUMMARY
-        echo "      \"env\": {" >> $GITHUB_STEP_SUMMARY
-        echo "        \"GEMINI_API_KEY\": \"<your_api_key_from_google_ai_studio>\"" >> $GITHUB_STEP_SUMMARY
-        echo "      }" >> $GITHUB_STEP_SUMMARY
+        echo "      ]" >> $GITHUB_STEP_SUMMARY
         echo "    }" >> $GITHUB_STEP_SUMMARY
         echo "  }" >> $GITHUB_STEP_SUMMARY
         echo "}" >> $GITHUB_STEP_SUMMARY
@@ -119,31 +116,30 @@ jobs:
         echo "      \"command\": \"docker\"," >> $GITHUB_STEP_SUMMARY
         echo "      \"args\": [" >> $GITHUB_STEP_SUMMARY
         echo "        \"run\", \"--rm\", \"-i\"," >> $GITHUB_STEP_SUMMARY
-        echo "        \"-e\", \"GEMINI_API_KEY\"," >> $GITHUB_STEP_SUMMARY
-        echo "        \"-e\", \"OPENAI_API_KEY\"," >> $GITHUB_STEP_SUMMARY
-        echo "        \"-e\", \"XAI_API_KEY\"," >> $GITHUB_STEP_SUMMARY
-        echo "        \"-e\", \"OPENROUTER_API_KEY\"," >> $GITHUB_STEP_SUMMARY
-        echo "        \"-e\", \"CUSTOM_API_URL\"," >> $GITHUB_STEP_SUMMARY
-        echo "        \"-e\", \"CUSTOM_API_KEY\"," >> $GITHUB_STEP_SUMMARY
-        echo "        \"-e\", \"CUSTOM_MODEL_NAME\"," >> $GITHUB_STEP_SUMMARY
-        echo "        \"-e\", \"DEFAULT_MODEL\"," >> $GITHUB_STEP_SUMMARY
-        echo "        \"-v\", \"\${HOME}:\${HOME}\"," >> $GITHUB_STEP_SUMMARY
+        echo "        \"-e\", \"GEMINI_API_KEY=<your-gemini-key>\"," >> $GITHUB_STEP_SUMMARY
+        echo "        \"-e\", \"OPENAI_API_KEY=<your-openai-key>\"," >> $GITHUB_STEP_SUMMARY
+        echo "        \"-e\", \"XAI_API_KEY=<your-xai-key>\"," >> $GITHUB_STEP_SUMMARY
+        echo "        \"-e\", \"OPENROUTER_API_KEY=<your-openrouter-key>\"," >> $GITHUB_STEP_SUMMARY
+        echo "        \"-e\", \"CUSTOM_API_URL=http://host.docker.internal:11434/v1\"," >> $GITHUB_STEP_SUMMARY
+        echo "        \"-e\", \"CUSTOM_API_KEY=\"," >> $GITHUB_STEP_SUMMARY
+        echo "        \"-e\", \"CUSTOM_MODEL_NAME=llama3.2\"," >> $GITHUB_STEP_SUMMARY
+        echo "        \"-e\", \"DEFAULT_MODEL=auto\"," >> $GITHUB_STEP_SUMMARY
+        echo "        \"-v\", \"<path_to_your_workspace>:<path_to_your_workspace>\"," >> $GITHUB_STEP_SUMMARY
         echo "        \"$MAIN_TAG\"" >> $GITHUB_STEP_SUMMARY
-        echo "      ]," >> $GITHUB_STEP_SUMMARY
-        echo "      \"env\": {" >> $GITHUB_STEP_SUMMARY
-        echo "        \"GEMINI_API_KEY\": \"<your-gemini-key>\"," >> $GITHUB_STEP_SUMMARY
-        echo "        \"OPENAI_API_KEY\": \"<your-openai-key>\"," >> $GITHUB_STEP_SUMMARY
-        echo "        \"XAI_API_KEY\": \"<your-xai-key>\"," >> $GITHUB_STEP_SUMMARY
-        echo "        \"OPENROUTER_API_KEY\": \"<your-openrouter-key>\"," >> $GITHUB_STEP_SUMMARY
-        echo "        \"CUSTOM_API_URL\": \"http://host.docker.internal:11434/v1\"," >> $GITHUB_STEP_SUMMARY
-        echo "        \"CUSTOM_API_KEY\": \"\"," >> $GITHUB_STEP_SUMMARY
-        echo "        \"CUSTOM_MODEL_NAME\": \"llama3.2\"," >> $GITHUB_STEP_SUMMARY
-        echo "        \"DEFAULT_MODEL\": \"auto\"" >> $GITHUB_STEP_SUMMARY
-        echo "      }" >> $GITHUB_STEP_SUMMARY
+        echo "      ]" >> $GITHUB_STEP_SUMMARY
         echo "    }" >> $GITHUB_STEP_SUMMARY
         echo "  }" >> $GITHUB_STEP_SUMMARY
         echo "}" >> $GITHUB_STEP_SUMMARY
         echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        echo "**Note:** Replace \`<path_to_your_workspace>\` with the directory where your projects are located." >> $GITHUB_STEP_SUMMARY
+        echo "This is the directory that MCP server will have access to. Examples:" >> $GITHUB_STEP_SUMMARY
+        echo "- macOS: \`/Users/your_username/Documents\` or \`/Users/your_username/Projects\`" >> $GITHUB_STEP_SUMMARY
+        echo "- Linux: \`/home/your_username/projects\` or \`/home/your_username/workspace\`" >> $GITHUB_STEP_SUMMARY
+        echo "- Windows: \`C:/Users/your_username/Documents\` or \`C:/Projects\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "⚠️ **Important:** The path must be the same on both sides of the colon!" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
         echo "### 🐳 Using Docker Compose" >> $GITHUB_STEP_SUMMARY
