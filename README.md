@@ -144,7 +144,88 @@ The final implementation resulted in a 26% improvement in JSON parsing performan
 > If all APIs are configured, native APIs will take priority when there is a clash in model name, such as for `gemini` and `o3`.
 > Configure your model aliases and give them unique names in [`conf/custom_models.json`](conf/custom_models.json)
 
-### 2. Clone and Set Up
+### 2. Choose Your Setup Method
+
+#### Option A: Use Pre-built Docker Image (Recommended)
+
+**No need to clone the repository!** You can use the pre-built Docker image directly from GitHub Container Registry:
+
+**Basic Configuration (Gemini only):**
+```json
+{
+  "mcpServers": {
+    "zen": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-e", "GEMINI_API_KEY",
+        "ghcr.io/beehiveinnovations/zen-mcp-server:v4.8.0"
+      ],
+      "env": {
+        "GEMINI_API_KEY": "<your_api_key_from_google_ai_studio>"
+      }
+    }
+  }
+}
+```
+
+**Comprehensive Configuration (All Available Options):**
+```json
+{
+  "mcpServers": {
+    "zen": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-e", "GEMINI_API_KEY",
+        "-e", "OPENAI_API_KEY",
+        "-e", "XAI_API_KEY",
+        "-e", "OPENROUTER_API_KEY",
+        "-e", "CUSTOM_API_URL",
+        "-e", "CUSTOM_API_KEY",
+        "-e", "CUSTOM_MODEL_NAME",
+        "-e", "DEFAULT_MODEL",
+        "-e", "WORKSPACE_ROOT",
+        "-v", "${HOME}:${HOME}",
+        "ghcr.io/beehiveinnovations/zen-mcp-server:latest"
+      ],
+      "env": {
+        "GEMINI_API_KEY": "<your_gemini_api_key>",
+        "OPENAI_API_KEY": "<your_openai_api_key>",
+        "XAI_API_KEY": "<your_xai_api_key>",
+        "OPENROUTER_API_KEY": "<your_openrouter_api_key>",
+        "CUSTOM_API_URL": "http://host.docker.internal:11434/v1",
+        "CUSTOM_API_KEY": "",
+        "CUSTOM_MODEL_NAME": "llama3.2",
+        "DEFAULT_MODEL": "auto",
+        "WORKSPACE_ROOT": "${HOME}"
+      }
+    }
+  }
+}
+```
+
+**Environment Variables:**
+- **Required (at least one):**
+  - `GEMINI_API_KEY`: For Gemini Pro & Flash models
+  - `OPENAI_API_KEY`: For O3, O3mini, O4-mini models
+  - `XAI_API_KEY`: For GROK models
+  - `OPENROUTER_API_KEY`: For OpenRouter models
+  - `CUSTOM_API_URL`: For local models (Ollama, vLLM, etc.)
+
+- **Optional:**
+  - `DEFAULT_MODEL`: Model selection mode (`auto`, `gemini`, `flash`, `o3`, etc.) - default: `auto`
+  - `WORKSPACE_ROOT`: Root directory for file access - default: your home directory
+  - `CUSTOM_API_KEY`: API key for custom endpoints (empty for Ollama)
+  - `CUSTOM_MODEL_NAME`: Default model name for custom endpoints
+
+**Notes:**
+- For Claude Code CLI: Add configuration to `~/Library/Application Support/Claude/claude_cli_config.json`
+- For Claude Desktop: Add configuration to `claude_desktop_config.json`
+- Use `:latest` for the newest version or `:v4.8.0` for a specific version
+- The `-v "${HOME}:${HOME}"` volume mount allows the server to access your files
+
+#### Option B: Clone and Build Locally
 
 ```bash
 # Clone to your preferred location

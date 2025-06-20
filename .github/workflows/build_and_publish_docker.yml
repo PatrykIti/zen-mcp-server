@@ -49,9 +49,8 @@ jobs:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         tags: |
           type=ref,event=tag
-          type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+          type=raw,value=latest,enable=${{ github.ref_type == 'tag' || github.event_name == 'repository_dispatch' }}
           type=raw,value=${{ steps.extract_version.outputs.version }},enable=${{ github.event_name == 'repository_dispatch' }}
-          type=raw,value=pr-${{ github.event.client_payload.pr_number }},enable=${{ github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number != '' }}
 
     - name: Build and push Docker image
       id: build
@@ -114,12 +113,12 @@ jobs:
         echo "${{ steps.meta.outputs.tags }}" | sed 's/^/- `/' | sed 's/$/`/' >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
-        if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
-          echo "**Note:** This is a development build triggered by PR #${{ github.event.client_payload.pr_number }}" >> $GITHUB_STEP_SUMMARY
-          echo "Use this image for testing the changes from that PR." >> $GITHUB_STEP_SUMMARY
-        elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+        if [[ "${{ github.ref_type }}" == "tag" ]]; then
           echo "**Note:** This is a release build from tag ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
           echo "This image represents a stable release version." >> $GITHUB_STEP_SUMMARY
+        elif [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+          echo "**Note:** This is a manual build triggered by repository dispatch" >> $GITHUB_STEP_SUMMARY
+          echo "The latest tag has been updated to this build." >> $GITHUB_STEP_SUMMARY
         fi
         
         echo "" >> $GITHUB_STEP_SUMMARY
@@ -138,10 +137,6 @@ jobs:
           # For tag releases, use the version tag
           LATEST_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
           UPDATE_TYPE="release"
-        elif [[ "${{ github.event_name }}" == "repository_dispatch" && "${{ github.event.client_payload.pr_number }}" != "" ]]; then
-          # For repository_dispatch (PR builds), use the PR tag
-          LATEST_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:pr-${{ github.event.client_payload.pr_number }}"
-          UPDATE_TYPE="development"
         else
           # For manual repository_dispatch without PR number, use latest tag
           LATEST_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
@@ -179,17 +174,10 @@ jobs:
           All documentation now references the latest stable image.
 
           🤖 Automated by GitHub Actions"
-          elif [[ "$UPDATE_TYPE" == "development" ]]; then
-            git commit -m "docs: Update Docker image references for PR #${{ github.event.client_payload.pr_number }}
-
-          Automated update after Docker image publish for development build.
-          Documentation updated to reference the latest development image.
-
-          🤖 Automated by GitHub Actions"
           else
             git commit -m "docs: Update Docker image references to latest
 
-          Automated update after manual Docker image build.
+          Automated update after Docker image build.
           Documentation updated to reference the latest image.
 
           🤖 Automated by GitHub Actions"
