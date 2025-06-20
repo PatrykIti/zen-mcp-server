@@ -207,7 +207,7 @@ jobs:
             - `ghcr.io/patrykiti/zen-mcp-server:v5.2.4` - Specific version
 
             For more details, see the [Docker setup guide](docker-compose.yml) in this repository.
-            DOCKER_SECTION
+DOCKER_SECTION
             echo "Docker section appended to README.md"
             echo "::endgroup::"
             git add README.md
