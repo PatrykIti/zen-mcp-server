@@ -17,10 +17,13 @@ import json
 import logging
 import os
 from abc import ABC, abstractmethod
-from typing import Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from mcp.types import TextContent
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from tools.models import ToolModelCategory
 
 from config import MCP_PROMPT_SIZE_LIMIT
 from providers import ModelProvider, ModelProviderRegistry
@@ -34,7 +37,7 @@ from utils.conversation_memory import (
 )
 from utils.file_utils import read_file_content, read_files, translate_path_for_environment
 
-from .models import ClarificationRequest, ContinuationOffer, ToolOutput
+from .models import SPECIAL_STATUS_MODELS, ContinuationOffer, ToolOutput
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +61,7 @@ class ToolRequest(BaseModel):
     thinking_mode: Optional[Literal["minimal", "low", "medium", "high", "max"]] = Field(
         None,
         description=(
-            "Thinking depth: minimal (0.5% of model max), low (8%), medium (33%), high (67%), "
-            "max (100% of model max)"
+            "Thinking depth: minimal (0.5% of model max), low (8%), medium (33%), high (67%), max (100% of model max)"
         ),
     )
     use_websearch: Optional[bool] = Field(
@@ -76,8 +78,10 @@ class ToolRequest(BaseModel):
     continuation_id: Optional[str] = Field(
         None,
         description=(
-            "Thread continuation ID for multi-turn conversations. Can be used to continue conversations "
-            "across different tools. Only provide this if continuing a previous conversation thread."
+            "Thread continuation ID for multi-turn conversations. When provided, the complete conversation "
+            "history is automatically embedded as context. Your response should build upon this history "
+            "without repeating previous analysis or instructions. Focus on providing only new insights, "
+            "additional findings, or answers to follow-up questions. Can be used across different tools."
         ),
     )
 
@@ -88,6 +92,30 @@ class BaseTool(ABC):
 
     This class defines the interface that all tools must implement and provides
     common functionality for request handling, model creation, and response formatting.
+
+    CONVERSATION-AWARE FILE PROCESSING:
+    This base class implements the sophisticated dual prioritization strategy for
+    conversation-aware file handling across all tools:
+
+    1. FILE DEDUPLICATION WITH NEWEST-FIRST PRIORITY:
+       - When same file appears in multiple conversation turns, newest reference wins
+       - Prevents redundant file embedding while preserving most recent file state
+       - Cross-tool file tracking ensures consistent behavior across analyze → codereview → debug
+
+    2. CONVERSATION CONTEXT INTEGRATION:
+       - All tools receive enhanced prompts with conversation history via reconstruct_thread_context()
+       - File references from previous turns are preserved and accessible
+       - Cross-tool knowledge transfer maintains full context without manual file re-specification
+
+    3. TOKEN-AWARE FILE EMBEDDING:
+       - Respects model-specific token allocation budgets from ModelContext
+       - Prioritizes conversation history, then newest files, then remaining content
+       - Graceful degradation when token limits are approached
+
+    4. STATELESS-TO-STATEFUL BRIDGING:
+       - Tools operate on stateless MCP requests but access full conversation state
+       - Conversation memory automatically injected via continuation_id parameter
+       - Enables natural AI-to-AI collaboration across tool boundaries
 
     To create a new tool:
     1. Create a new class that inherits from BaseTool
@@ -101,6 +129,7 @@ class BaseTool(ABC):
         self.name = self.get_name()
         self.description = self.get_description()
         self.default_temperature = self.get_default_temperature()
+        # Tool initialization complete
 
     @abstractmethod
     def get_name(self) -> str:
@@ -155,6 +184,104 @@ class BaseTool(ABC):
         """
         pass
 
+    def is_effective_auto_mode(self) -> bool:
+        """
+        Check if we're in effective auto mode for schema generation.
+
+        This determines whether the model parameter should be required in the tool schema.
+        Used at initialization time when schemas are generated.
+
+        Returns:
+            bool: True if model parameter should be required in the schema
+        """
+        from config import DEFAULT_MODEL
+        from providers.registry import ModelProviderRegistry
+
+        # Case 1: Explicit auto mode
+        if DEFAULT_MODEL.lower() == "auto":
+            return True
+
+        # Case 2: Model not available (fallback to auto mode)
+        if DEFAULT_MODEL.lower() != "auto":
+            provider = ModelProviderRegistry.get_provider_for_model(DEFAULT_MODEL)
+            if not provider:
+                return True
+
+        return False
+
+    def _should_require_model_selection(self, model_name: str) -> bool:
+        """
+        Check if we should require Claude to select a model at runtime.
+
+        This is called during request execution to determine if we need
+        to return an error asking Claude to provide a model parameter.
+
+        Args:
+            model_name: The model name from the request or DEFAULT_MODEL
+
+        Returns:
+            bool: True if we should require model selection
+        """
+        # Case 1: Model is explicitly "auto"
+        if model_name.lower() == "auto":
+            return True
+
+        # Case 2: Requested model is not available
+        from providers.registry import ModelProviderRegistry
+
+        provider = ModelProviderRegistry.get_provider_for_model(model_name)
+        if not provider:
+            logger = logging.getLogger(f"tools.{self.name}")
+            logger.warning(f"Model '{model_name}' is not available with current API keys. Requiring model selection.")
+            return True
+
+        return False
+
+    def _get_available_models(self) -> list[str]:
+        """
+        Get list of models that are actually available with current API keys.
+
+        This respects model restrictions automatically.
+
+        Returns:
+            List of available model names
+        """
+        from config import MODEL_CAPABILITIES_DESC
+        from providers.base import ProviderType
+        from providers.registry import ModelProviderRegistry
+
+        # Get available models from registry (respects restrictions)
+        available_models_map = ModelProviderRegistry.get_available_models(respect_restrictions=True)
+        available_models = list(available_models_map.keys())
+
+        # Add model aliases if their targets are available
+        model_aliases = []
+        for alias, target in MODEL_CAPABILITIES_DESC.items():
+            if alias not in available_models and target in available_models:
+                model_aliases.append(alias)
+
+        available_models.extend(model_aliases)
+
+        # Also check if OpenRouter is available (it accepts any model)
+        openrouter_provider = ModelProviderRegistry.get_provider(ProviderType.OPENROUTER)
+        if openrouter_provider and not available_models:
+            # If only OpenRouter is available, suggest using any model through it
+            available_models.append("any model via OpenRouter")
+
+        if not available_models:
+            # Check if it's due to restrictions
+            from utils.model_restrictions import get_restriction_service
+
+            restriction_service = get_restriction_service()
+            restrictions = restriction_service.get_restriction_summary()
+
+            if restrictions:
+                return ["none - all models blocked by restrictions set in .env"]
+            else:
+                return ["none - please configure API keys"]
+
+        return available_models
+
     def get_model_field_schema(self) -> dict[str, Any]:
         """
         Generate the model field schema based on auto mode configuration.
@@ -167,16 +294,20 @@ class BaseTool(ABC):
         """
         import os
 
-        from config import DEFAULT_MODEL, IS_AUTO_MODE, MODEL_CAPABILITIES_DESC
+        from config import DEFAULT_MODEL, MODEL_CAPABILITIES_DESC
 
         # Check if OpenRouter is configured
         has_openrouter = bool(
             os.getenv("OPENROUTER_API_KEY") and os.getenv("OPENROUTER_API_KEY") != "your_openrouter_api_key_here"
         )
 
-        if IS_AUTO_MODE:
+        # Use the centralized effective auto mode check
+        if self.is_effective_auto_mode():
             # In auto mode, model is required and we provide detailed descriptions
-            model_desc_parts = ["Choose the best model for this task based on these capabilities:"]
+            model_desc_parts = [
+                "IMPORTANT: Use the model specified by the user if provided, OR select the most suitable model "
+                "for this specific task based on the requirements and capabilities listed below:"
+            ]
             for model, desc in MODEL_CAPABILITIES_DESC.items():
                 model_desc_parts.append(f"- '{model}': {desc}")
 
@@ -289,6 +420,27 @@ class BaseTool(ABC):
         """
         return 0.5
 
+    def wants_line_numbers_by_default(self) -> bool:
+        """
+        Return whether this tool wants line numbers added to code files by default.
+
+        By default, ALL tools get line numbers for precise code references.
+        Line numbers are essential for accurate communication about code locations.
+
+        Line numbers add ~8-10% token overhead but provide precise targeting for:
+        - Code review feedback ("SQL injection on line 45")
+        - Debug error locations ("Memory leak in loop at lines 123-156")
+        - Test generation targets ("Generate tests for method at lines 78-95")
+        - Refactoring guidance ("Extract method from lines 67-89")
+        - General code discussions ("Where is X defined?" -> "Line 42")
+
+        The only exception is when reading diffs, which have their own line markers.
+
+        Returns:
+            bool: True if line numbers should be added by default for this tool
+        """
+        return True  # All tools get line numbers by default for consistency
+
     def get_default_thinking_mode(self) -> str:
         """
         Return the default thinking mode for this tool.
@@ -300,6 +452,21 @@ class BaseTool(ABC):
             str: One of "minimal", "low", "medium", "high", "max"
         """
         return "medium"  # Default to medium thinking for better reasoning
+
+    def get_model_category(self) -> "ToolModelCategory":
+        """
+        Return the model category for this tool.
+
+        Model category influences which model is selected in auto mode.
+        Override to specify whether your tool needs extended reasoning,
+        fast response, or balanced capabilities.
+
+        Returns:
+            ToolModelCategory: Category that influences model selection
+        """
+        from tools.models import ToolModelCategory
+
+        return ToolModelCategory.BALANCED
 
     def get_conversation_embedded_files(self, continuation_id: Optional[str]) -> list[str]:
         """
@@ -401,14 +568,35 @@ class BaseTool(ABC):
         reserve_tokens: int = 1_000,
         remaining_budget: Optional[int] = None,
         arguments: Optional[dict] = None,
-    ) -> str:
+    ) -> tuple[str, list[str]]:
         """
-        Centralized file processing for tool prompts.
+        Centralized file processing implementing dual prioritization strategy.
 
-        This method handles the common pattern across all tools:
-        1. Filter out files already embedded in conversation history
-        2. Read content of only new files
-        3. Generate informative note about skipped files
+        DUAL PRIORITIZATION STRATEGY CORE IMPLEMENTATION:
+        This method is the heart of conversation-aware file processing across all tools:
+
+        1. CONVERSATION-AWARE FILE DEDUPLICATION:
+           - Automatically detects and filters files already embedded in conversation history
+           - Implements newest-first prioritization: when same file appears in multiple turns,
+             only the newest reference is preserved to avoid redundant content
+           - Cross-tool file tracking ensures consistent behavior across tool boundaries
+
+        2. TOKEN-BUDGET OPTIMIZATION:
+           - Respects remaining token budget from conversation context reconstruction
+           - Prioritizes conversation history + newest file versions within constraints
+           - Graceful degradation when token limits approached (newest files preserved first)
+           - Model-specific token allocation ensures optimal context window utilization
+
+        3. CROSS-TOOL CONTINUATION SUPPORT:
+           - File references persist across different tools (analyze → codereview → debug)
+           - Previous tool file embeddings are tracked and excluded from new embeddings
+           - Maintains complete file context without manual re-specification
+
+        PROCESSING WORKFLOW:
+        1. Filter out files already embedded in conversation history using newest-first priority
+        2. Read content of only new files within remaining token budget
+        3. Generate informative notes about skipped files for user transparency
+        4. Return formatted content ready for prompt inclusion
 
         Args:
             request_files: List of files requested for current tool execution
@@ -420,10 +608,13 @@ class BaseTool(ABC):
             arguments: Original tool arguments (used to extract _remaining_tokens if available)
 
         Returns:
-            str: Formatted file content string ready for prompt inclusion
+            tuple[str, list[str]]: (formatted_file_content, actually_processed_files)
+                - formatted_file_content: Formatted file content string ready for prompt inclusion
+                - actually_processed_files: List of individual file paths that were actually read and embedded
+                  (directories are expanded to individual files)
         """
         if not request_files:
-            return ""
+            return "", []
 
         # Note: Even if conversation history is already embedded, we still need to process
         # any NEW files that aren't in the conversation history yet. The filter_new_files
@@ -468,36 +659,82 @@ class BaseTool(ABC):
                 from config import DEFAULT_MODEL
 
                 model_name = getattr(self, "_current_model_name", None) or DEFAULT_MODEL
-                try:
-                    provider = self.get_model_provider(model_name)
-                    capabilities = provider.get_capabilities(model_name)
 
-                    # Calculate content allocation based on model capacity
-                    if capabilities.context_window < 300_000:
-                        # Smaller context models: 60% content, 40% response
-                        model_content_tokens = int(capabilities.context_window * 0.6)
-                    else:
-                        # Larger context models: 80% content, 20% response
-                        model_content_tokens = int(capabilities.context_window * 0.8)
+                # Handle auto mode gracefully
+                if model_name.lower() == "auto":
+                    from providers.registry import ModelProviderRegistry
 
-                    effective_max_tokens = model_content_tokens - reserve_tokens
+                    # Use tool-specific fallback model for capacity estimation
+                    # This properly handles different providers (OpenAI=200K, Gemini=1M)
+                    tool_category = self.get_model_category()
+                    fallback_model = ModelProviderRegistry.get_preferred_fallback_model(tool_category)
                     logger.debug(
-                        f"[FILES] {self.name}: Using model-specific limit for {model_name}: "
-                        f"{model_content_tokens:,} content tokens from {capabilities.context_window:,} total"
+                        f"[FILES] {self.name}: Auto mode detected, using {fallback_model} "
+                        f"for {tool_category.value} tool capacity estimation"
                     )
-                except (ValueError, AttributeError) as e:
-                    # Handle specific errors: provider not found, model not supported, missing attributes
-                    logger.warning(
-                        f"[FILES] {self.name}: Could not get model capabilities for {model_name}: {type(e).__name__}: {e}"
-                    )
-                    # Fall back to conservative default for safety
-                    effective_max_tokens = 100_000 - reserve_tokens
-                except Exception as e:
-                    # Catch any other unexpected errors
-                    logger.error(
-                        f"[FILES] {self.name}: Unexpected error getting model capabilities: {type(e).__name__}: {e}"
-                    )
-                    effective_max_tokens = 100_000 - reserve_tokens
+
+                    try:
+                        provider = self.get_model_provider(fallback_model)
+                        capabilities = provider.get_capabilities(fallback_model)
+
+                        # Calculate content allocation based on model capacity
+                        if capabilities.context_window < 300_000:
+                            # Smaller context models: 60% content, 40% response
+                            model_content_tokens = int(capabilities.context_window * 0.6)
+                        else:
+                            # Larger context models: 80% content, 20% response
+                            model_content_tokens = int(capabilities.context_window * 0.8)
+
+                        effective_max_tokens = model_content_tokens - reserve_tokens
+                        logger.debug(
+                            f"[FILES] {self.name}: Using {fallback_model} capacity for auto mode: "
+                            f"{model_content_tokens:,} content tokens from {capabilities.context_window:,} total"
+                        )
+                    except (ValueError, AttributeError) as e:
+                        # Handle specific errors: provider not found, model not supported, missing attributes
+                        logger.warning(
+                            f"[FILES] {self.name}: Could not get capabilities for fallback model {fallback_model}: {type(e).__name__}: {e}"
+                        )
+                        # Fall back to conservative default for safety
+                        effective_max_tokens = 100_000 - reserve_tokens
+                    except Exception as e:
+                        # Catch any other unexpected errors
+                        logger.error(
+                            f"[FILES] {self.name}: Unexpected error getting model capabilities: {type(e).__name__}: {e}"
+                        )
+                        effective_max_tokens = 100_000 - reserve_tokens
+                else:
+                    # Normal mode - use the specified model
+                    try:
+                        provider = self.get_model_provider(model_name)
+                        capabilities = provider.get_capabilities(model_name)
+
+                        # Calculate content allocation based on model capacity
+                        if capabilities.context_window < 300_000:
+                            # Smaller context models: 60% content, 40% response
+                            model_content_tokens = int(capabilities.context_window * 0.6)
+                        else:
+                            # Larger context models: 80% content, 20% response
+                            model_content_tokens = int(capabilities.context_window * 0.8)
+
+                        effective_max_tokens = model_content_tokens - reserve_tokens
+                        logger.debug(
+                            f"[FILES] {self.name}: Using model-specific limit for {model_name}: "
+                            f"{model_content_tokens:,} content tokens from {capabilities.context_window:,} total"
+                        )
+                    except (ValueError, AttributeError) as e:
+                        # Handle specific errors: provider not found, model not supported, missing attributes
+                        logger.warning(
+                            f"[FILES] {self.name}: Could not get model capabilities for {model_name}: {type(e).__name__}: {e}"
+                        )
+                        # Fall back to conservative default for safety
+                        effective_max_tokens = 100_000 - reserve_tokens
+                    except Exception as e:
+                        # Catch any other unexpected errors
+                        logger.error(
+                            f"[FILES] {self.name}: Unexpected error getting model capabilities: {type(e).__name__}: {e}"
+                        )
+                        effective_max_tokens = 100_000 - reserve_tokens
 
         # Ensure we have a reasonable minimum budget
         effective_max_tokens = max(1000, effective_max_tokens)
@@ -516,6 +753,7 @@ class BaseTool(ABC):
             )
 
         content_parts = []
+        actually_processed_files = []
 
         # Read content of new files only
         if files_to_embed:
@@ -524,11 +762,25 @@ class BaseTool(ABC):
                 f"[FILES] {self.name}: Starting file embedding with token budget {effective_max_tokens + reserve_tokens:,}"
             )
             try:
+                # Before calling read_files, expand directories to get individual file paths
+                from utils.file_utils import expand_paths
+
+                expanded_files = expand_paths(files_to_embed)
+                logger.debug(
+                    f"[FILES] {self.name}: Expanded {len(files_to_embed)} paths to {len(expanded_files)} individual files"
+                )
+
                 file_content = read_files(
-                    files_to_embed, max_tokens=effective_max_tokens + reserve_tokens, reserve_tokens=reserve_tokens
+                    files_to_embed,
+                    max_tokens=effective_max_tokens + reserve_tokens,
+                    reserve_tokens=reserve_tokens,
+                    include_line_numbers=self.wants_line_numbers_by_default(),
                 )
                 self._validate_token_limit(file_content, context_description)
                 content_parts.append(file_content)
+
+                # Track the expanded files as actually processed
+                actually_processed_files.extend(expanded_files)
 
                 # Estimate tokens for debug logging
                 from utils.token_utils import estimate_tokens
@@ -538,6 +790,9 @@ class BaseTool(ABC):
                     f"{self.name} tool successfully embedded {len(files_to_embed)} files ({content_tokens:,} tokens)"
                 )
                 logger.debug(f"[FILES] {self.name}: Successfully embedded files - {content_tokens:,} tokens used")
+                logger.debug(
+                    f"[FILES] {self.name}: Actually processed {len(actually_processed_files)} individual files"
+                )
             except Exception as e:
                 logger.error(f"{self.name} tool failed to embed files {files_to_embed}: {type(e).__name__}: {e}")
                 logger.debug(f"[FILES] {self.name}: File embedding failed - {type(e).__name__}: {e}")
@@ -567,8 +822,10 @@ class BaseTool(ABC):
                 logger.debug(f"[FILES] {self.name}: No skipped files to note")
 
         result = "".join(content_parts) if content_parts else ""
-        logger.debug(f"[FILES] {self.name}: _prepare_file_content_for_prompt returning {len(result)} chars")
-        return result
+        logger.debug(
+            f"[FILES] {self.name}: _prepare_file_content_for_prompt returning {len(result)} chars, {len(actually_processed_files)} processed files"
+        )
+        return result, actually_processed_files
 
     def get_websearch_instruction(self, use_websearch: bool, tool_specific: Optional[str] = None) -> str:
         """
@@ -670,37 +927,102 @@ When recommending searches, be specific about what information you need and why 
 
     def check_prompt_size(self, text: str) -> Optional[dict[str, Any]]:
         """
-        Check if a text field is too large for MCP's token limits.
+        Check if USER INPUT text is too large for MCP transport boundary.
+
+        IMPORTANT: This method should ONLY be used to validate user input that crosses
+        the Claude CLI ↔ MCP Server transport boundary. It should NOT be used to limit
+        internal MCP Server operations.
+
+        MCP Protocol Boundaries:
+        Claude CLI ←→ MCP Server ←→ External Model
+            ↑                              ↑
+        This limit applies here      This is NOT limited
 
         The MCP protocol has a combined request+response limit of ~25K tokens.
-        To ensure adequate space for responses, we limit prompt input to a
-        configurable character limit (default 50K chars ~= 10-12K tokens).
-        Larger prompts are handled by having Claude save them to a file,
-        bypassing MCP's token constraints while preserving response capacity.
+        To ensure adequate space for MCP Server → Claude CLI responses, we limit
+        user input to 50K characters (roughly ~10-12K tokens). Larger user prompts
+        are handled by having Claude save them to prompt.txt files, bypassing MCP's
+        transport constraints while preserving response capacity.
+
+        What should be checked with this method:
+        - request.prompt field (user input from Claude CLI)
+        - prompt.txt file content (alternative user input)
+        - Other direct user input fields
+
+        What should NOT be checked with this method:
+        - System prompts added internally
+        - File content embedded by tools
+        - Conversation history from Redis
+        - Complete prompts sent to external models
 
         Args:
-            text: The text to check
+            text: The user input text to check (NOT internal prompt content)
 
         Returns:
             Optional[Dict[str, Any]]: Response asking for file handling if too large, None otherwise
         """
         if text and len(text) > MCP_PROMPT_SIZE_LIMIT:
             return {
-                "status": "requires_file_prompt",
+                "status": "resend_prompt",
                 "content": (
-                    f"The prompt is too large for MCP's token limits (>{MCP_PROMPT_SIZE_LIMIT:,} characters). "
-                    "Please save the prompt text to a temporary file named 'prompt.txt' and "
-                    "resend the request with an empty prompt string and the absolute file path included "
-                    "in the files parameter, along with any other files you wish to share as context."
+                    f"MANDATORY ACTION REQUIRED: The prompt is too large for MCP's token limits (>{MCP_PROMPT_SIZE_LIMIT:,} characters). "
+                    "YOU MUST IMMEDIATELY save the prompt text to a temporary file named 'prompt.txt' in the working directory. "
+                    "DO NOT attempt to shorten or modify the prompt. SAVE IT AS-IS to 'prompt.txt'. "
+                    "Then resend the request with the absolute file path to 'prompt.txt' in the files parameter, "
+                    "along with any other files you wish to share as context. Leave the prompt text itself empty or very brief in the new request. "
+                    "This is the ONLY way to handle large prompts - you MUST follow these exact steps."
                 ),
                 "content_type": "text",
                 "metadata": {
                     "prompt_size": len(text),
                     "limit": MCP_PROMPT_SIZE_LIMIT,
-                    "instructions": "Save prompt to 'prompt.txt' and include absolute path in files parameter",
+                    "instructions": "MANDATORY: Save prompt to 'prompt.txt' in current folder and include absolute path in files parameter. DO NOT modify or shorten the prompt.",
                 },
             }
         return None
+
+    def estimate_tokens_smart(self, file_path: str) -> int:
+        """
+        Estimate tokens for a file using file-type aware ratios.
+
+        Args:
+            file_path: Path to the file
+
+        Returns:
+            int: Estimated token count
+        """
+        from utils.file_utils import estimate_file_tokens
+
+        return estimate_file_tokens(file_path)
+
+    def check_total_file_size(self, files: list[str]) -> Optional[dict[str, Any]]:
+        """
+        Check if total file sizes would exceed token threshold before embedding.
+
+        IMPORTANT: This performs STRICT REJECTION at MCP boundary.
+        No partial inclusion - either all files fit or request is rejected.
+        This forces Claude to make better file selection decisions.
+
+        Args:
+            files: List of file paths to check
+
+        Returns:
+            Dict with `code_too_large` response if too large, None if acceptable
+        """
+        if not files:
+            return None
+
+        # Get current model name for context-aware thresholds
+        model_name = getattr(self, "_current_model_name", None)
+        if not model_name:
+            from config import DEFAULT_MODEL
+
+            model_name = DEFAULT_MODEL
+
+        # Use centralized file size checking with model context
+        from utils.file_utils import check_total_file_size as check_file_size_utility
+
+        return check_file_size_utility(files, model_name)
 
     def handle_prompt_file(self, files: Optional[list[str]]) -> tuple[Optional[str], Optional[list[str]]]:
         """
@@ -790,7 +1112,7 @@ When recommending searches, be specific about what information you need and why 
 
             # Set up logger for this tool execution
             logger = logging.getLogger(f"tools.{self.name}")
-            logger.info(f"Starting {self.name} tool execution with arguments: {list(arguments.keys())}")
+            logger.info(f"🔧 {self.name} tool called with arguments: {list(arguments.keys())}")
 
             # Validate request using the tool's Pydantic model
             # This ensures all required fields are present and properly typed
@@ -852,18 +1174,45 @@ When recommending searches, be specific about what information you need and why 
 
                 model_name = DEFAULT_MODEL
 
-            # In auto mode, model parameter is required
-            from config import IS_AUTO_MODE
+            # Check if we need Claude to select a model
+            # This happens when:
+            # 1. The model is explicitly "auto"
+            # 2. The requested model is not available
+            if self._should_require_model_selection(model_name):
+                # Get suggested model based on tool category
+                from providers.registry import ModelProviderRegistry
 
-            if IS_AUTO_MODE and model_name.lower() == "auto":
+                tool_category = self.get_model_category()
+                suggested_model = ModelProviderRegistry.get_preferred_fallback_model(tool_category)
+
+                # Build error message based on why selection is required
+                if model_name.lower() == "auto":
+                    error_message = (
+                        f"Model parameter is required in auto mode. "
+                        f"Suggested model for {self.name}: '{suggested_model}' "
+                        f"(category: {tool_category.value})"
+                    )
+                else:
+                    # Model was specified but not available
+                    # Get list of available models
+                    available_models = self._get_available_models()
+
+                    error_message = (
+                        f"Model '{model_name}' is not available with current API keys. "
+                        f"Available models: {', '.join(available_models)}. "
+                        f"Suggested model for {self.name}: '{suggested_model}' "
+                        f"(category: {tool_category.value})"
+                    )
+
                 error_output = ToolOutput(
                     status="error",
-                    content="Model parameter is required. Please specify which model to use for this task.",
+                    content=error_message,
                     content_type="text",
                 )
                 return [TextContent(type="text", text=error_output.model_dump_json())]
 
             # Store model name for use by helper methods like _prepare_file_content_for_prompt
+            # Only set this after auto mode validation to prevent "auto" being used as a model name
             self._current_model_name = model_name
 
             temperature = getattr(request, "temperature", None)
@@ -910,7 +1259,7 @@ When recommending searches, be specific about what information you need and why 
                 # Pass model info for conversation tracking
                 model_info = {"provider": provider, "model_name": model_name, "model_response": model_response}
                 tool_output = self._parse_response(raw_text, request, model_info)
-                logger.info(f"Successfully completed {self.name} tool execution")
+                logger.info(f"✅ {self.name} tool completed successfully")
 
             else:
                 # Handle cases where the model couldn't generate a response
@@ -931,6 +1280,12 @@ When recommending searches, be specific about what information you need and why 
             # Return error information in standardized format
             logger = logging.getLogger(f"tools.{self.name}")
             error_msg = str(e)
+
+            # Check if this is an MCP size check error from prepare_prompt
+            if error_msg.startswith("MCP_SIZE_CHECK:"):
+                logger.info(f"MCP prompt size limit exceeded in {self.name}")
+                tool_output_json = error_msg[15:]  # Remove "MCP_SIZE_CHECK:" prefix
+                return [TextContent(type="text", text=tool_output_json)]
 
             # Check if this is a 500 INTERNAL error that asks for retry
             if "500 INTERNAL" in error_msg and "Please retry" in error_msg:
@@ -986,23 +1341,43 @@ When recommending searches, be specific about what information you need and why 
         logger = logging.getLogger(f"tools.{self.name}")
 
         try:
-            # Try to parse as JSON to check for clarification requests
+            # Try to parse as JSON to check for special status requests
             potential_json = json.loads(raw_text.strip())
 
-            if isinstance(potential_json, dict) and potential_json.get("status") == "requires_clarification":
-                # Validate the clarification request structure
-                clarification = ClarificationRequest(**potential_json)
-                return ToolOutput(
-                    status="requires_clarification",
-                    content=clarification.model_dump_json(),
-                    content_type="json",
-                    metadata={
-                        "original_request": (request.model_dump() if hasattr(request, "model_dump") else str(request))
-                    },
-                )
+            if isinstance(potential_json, dict) and "status" in potential_json:
+                status_key = potential_json.get("status")
+                status_model = SPECIAL_STATUS_MODELS.get(status_key)
+
+                if status_model:
+                    try:
+                        # Use Pydantic for robust validation of the special status
+                        parsed_status = status_model.model_validate(potential_json)
+                        logger.debug(f"{self.name} tool detected special status: {status_key}")
+
+                        # Extract model information for metadata
+                        metadata = {
+                            "original_request": (
+                                request.model_dump() if hasattr(request, "model_dump") else str(request)
+                            )
+                        }
+                        if model_info:
+                            model_name = model_info.get("model_name")
+                            if model_name:
+                                metadata["model_used"] = model_name
+
+                        return ToolOutput(
+                            status=status_key,
+                            content=parsed_status.model_dump_json(),
+                            content_type="json",
+                            metadata=metadata,
+                        )
+
+                    except Exception as e:
+                        # Invalid payload for known status, log warning and continue as normal response
+                        logger.warning(f"Invalid {status_key} payload: {e}")
 
         except (json.JSONDecodeError, ValueError, TypeError):
-            # Not a JSON clarification request, treat as normal response
+            # Not a JSON special status request, treat as normal response
             pass
 
         # Normal text response - format using tool-specific formatting
@@ -1055,11 +1430,18 @@ When recommending searches, be specific about what information you need and why 
             "markdown" if any(marker in formatted_content for marker in ["##", "**", "`", "- ", "1. "]) else "text"
         )
 
+        # Extract model information for metadata
+        metadata = {"tool_name": self.name}
+        if model_info:
+            model_name = model_info.get("model_name")
+            if model_name:
+                metadata["model_used"] = model_name
+
         return ToolOutput(
             status="success",
             content=formatted_content,
             content_type=content_type,
-            metadata={"tool_name": self.name},
+            metadata=metadata,
         )
 
     def _check_continuation_opportunity(self, request) -> Optional[dict]:
@@ -1134,7 +1516,9 @@ When recommending searches, be specific about what information you need and why 
             )
 
             # Add this response as the first turn (assistant turn)
-            request_files = getattr(request, "files", []) or []
+            # Use actually processed files from file preparation instead of original request files
+            # This ensures directories are tracked as their individual expanded files
+            request_files = getattr(self, "_actually_processed_files", []) or getattr(request, "files", []) or []
             # Extract model metadata
             model_provider = None
             model_name = None
@@ -1164,7 +1548,7 @@ When recommending searches, be specific about what information you need and why 
             remaining_turns = continuation_data["remaining_turns"]
             continuation_offer = ContinuationOffer(
                 continuation_id=thread_id,
-                message_to_user=(
+                note=(
                     f"If you'd like to continue this discussion or need to provide me with further details or context, "
                     f"you can use the continuation_id '{thread_id}' with any tool and any model. "
                     f"You have {remaining_turns} more exchange(s) available in this conversation thread."
@@ -1176,23 +1560,37 @@ When recommending searches, be specific about what information you need and why 
                 remaining_turns=remaining_turns,
             )
 
+            # Extract model information for metadata
+            metadata = {"tool_name": self.name, "thread_id": thread_id, "remaining_turns": remaining_turns}
+            if model_info:
+                model_name = model_info.get("model_name")
+                if model_name:
+                    metadata["model_used"] = model_name
+
             return ToolOutput(
                 status="continuation_available",
                 content=content,
                 content_type="markdown",
                 continuation_offer=continuation_offer,
-                metadata={"tool_name": self.name, "thread_id": thread_id, "remaining_turns": remaining_turns},
+                metadata=metadata,
             )
 
         except Exception as e:
             # If threading fails, return normal response but log the error
             logger = logging.getLogger(f"tools.{self.name}")
             logger.warning(f"Conversation threading failed in {self.name}: {str(e)}")
+            # Extract model information for metadata
+            metadata = {"tool_name": self.name, "threading_error": str(e)}
+            if model_info:
+                model_name = model_info.get("model_name")
+                if model_name:
+                    metadata["model_used"] = model_name
+
             return ToolOutput(
                 status="success",
                 content=content,
                 content_type="markdown",
-                metadata={"tool_name": self.name, "threading_error": str(e)},
+                metadata=metadata,
             )
 
     @abstractmethod

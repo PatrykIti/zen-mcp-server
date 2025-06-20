@@ -60,10 +60,10 @@ class TestPrecommitToolWithMockStore:
         temp_dir, _ = temp_repo
         tool = Precommit()
 
-        # Mock the Redis client getter and PROJECT_ROOT to allow access to temp files
+        # Mock the Redis client getter and SECURITY_ROOT to allow access to temp files
         with (
             patch("utils.conversation_memory.get_redis_client", return_value=mock_redis),
-            patch("utils.file_utils.PROJECT_ROOT", Path(temp_dir).resolve()),
+            patch("utils.file_utils.SECURITY_ROOT", Path(temp_dir).resolve()),
         ):
             yield tool
 
@@ -232,8 +232,12 @@ TEMPERATURE_ANALYTICAL = 0.2  # For code review, debugging
         temp_dir, config_path = temp_repo
 
         # Test the centralized file preparation method directly
-        file_content = tool._prepare_file_content_for_prompt(
-            [config_path], None, "Test files", max_tokens=100000, reserve_tokens=1000  # No continuation
+        file_content, processed_files = tool._prepare_file_content_for_prompt(
+            [config_path],
+            None,
+            "Test files",
+            max_tokens=100000,
+            reserve_tokens=1000,  # No continuation
         )
 
         # Should contain file markers

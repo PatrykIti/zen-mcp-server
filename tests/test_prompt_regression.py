@@ -75,7 +75,7 @@ class TestPromptRegression:
 
             # Mock file reading through the centralized method
             with patch.object(tool, "_prepare_file_content_for_prompt") as mock_prepare_files:
-                mock_prepare_files.return_value = "File content here"
+                mock_prepare_files.return_value = ("File content here", ["/path/to/file.py"])
 
                 result = await tool.execute({"prompt": "Analyze this code", "files": ["/path/to/file.py"]})
 
@@ -163,8 +163,12 @@ class TestPromptRegression:
                 with patch("tools.precommit.get_git_status") as mock_git_status:
                     mock_find_repos.return_value = ["/path/to/repo"]
                     mock_git_status.return_value = {
-                        "modified": ["file.py"],
-                        "untracked": [],
+                        "branch": "main",
+                        "ahead": 0,
+                        "behind": 0,
+                        "staged_files": ["file.py"],
+                        "unstaged_files": [],
+                        "untracked_files": [],
                     }
 
                     result = await tool.execute(

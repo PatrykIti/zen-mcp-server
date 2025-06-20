@@ -1,11 +1,12 @@
 """OpenRouter model registry for managing model configurations and aliases."""
 
-import json
 import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+from utils.file_utils import read_json_file, translate_path_for_environment
 
 from .base import ModelCapabilities, ProviderType, RangeTemperatureConstraint
 
@@ -22,6 +23,7 @@ class OpenRouterModelConfig:
     supports_streaming: bool = True
     supports_function_calling: bool = False
     supports_json_mode: bool = False
+    is_custom: bool = False  # True for models that should only be used with custom endpoints
     description: str = ""
 
     def to_capabilities(self) -> ModelCapabilities:
@@ -53,15 +55,19 @@ class OpenRouterModelRegistry:
 
         # Determine config path
         if config_path:
-            self.config_path = Path(config_path)
+            # Direct config_path parameter - translate for Docker if needed
+            translated_path = translate_path_for_environment(config_path)
+            self.config_path = Path(translated_path)
         else:
             # Check environment variable first
-            env_path = os.getenv("OPENROUTER_MODELS_PATH")
+            env_path = os.getenv("CUSTOM_MODELS_CONFIG_PATH")
             if env_path:
-                self.config_path = Path(env_path)
+                # Environment variable path - translate for Docker if needed
+                translated_path = translate_path_for_environment(env_path)
+                self.config_path = Path(translated_path)
             else:
-                # Default to conf/openrouter_models.json
-                self.config_path = Path(__file__).parent.parent / "conf" / "openrouter_models.json"
+                # Default to conf/custom_models.json (already in container)
+                self.config_path = Path(__file__).parent.parent / "conf" / "custom_models.json"
 
         # Load configuration
         self.reload()
@@ -71,7 +77,33 @@ class OpenRouterModelRegistry:
         try:
             configs = self._read_config()
             self._build_maps(configs)
-            logging.info(f"Loaded {len(self.model_map)} OpenRouter models with {len(self.alias_map)} aliases")
+            caller_info = ""
+            try:
+                import inspect
+
+                caller_frame = inspect.currentframe().f_back
+                if caller_frame:
+                    caller_name = caller_frame.f_code.co_name
+                    caller_file = (
+                        caller_frame.f_code.co_filename.split("/")[-1] if caller_frame.f_code.co_filename else "unknown"
+                    )
+                    # Look for tool context
+                    while caller_frame:
+                        frame_locals = caller_frame.f_locals
+                        if "self" in frame_locals and hasattr(frame_locals["self"], "get_name"):
+                            tool_name = frame_locals["self"].get_name()
+                            caller_info = f" (called from {tool_name} tool)"
+                            break
+                        caller_frame = caller_frame.f_back
+                    if not caller_info:
+                        caller_info = f" (called from {caller_name} in {caller_file})"
+            except Exception:
+                # If frame inspection fails, just continue without caller info
+                pass
+
+            logging.debug(
+                f"Loaded {len(self.model_map)} OpenRouter models with {len(self.alias_map)} aliases{caller_info}"
+            )
         except ValueError as e:
             # Re-raise ValueError only for duplicate aliases (critical config errors)
             logging.error(f"Failed to load OpenRouter model configuration: {e}")
@@ -97,8 +129,10 @@ class OpenRouterModelRegistry:
             return []
 
         try:
-            with open(self.config_path) as f:
-                data = json.load(f)
+            # Use centralized JSON reading utility
+            data = read_json_file(str(self.config_path))
+            if data is None:
+                raise ValueError(f"Could not read or parse JSON from {self.config_path}")
 
             # Parse models
             configs = []
@@ -107,8 +141,9 @@ class OpenRouterModelRegistry:
                 configs.append(config)
 
             return configs
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in {self.config_path}: {e}")
+        except ValueError:
+            # Re-raise ValueError for specific config errors
+            raise
         except Exception as e:
             raise ValueError(f"Error reading config from {self.config_path}: {e}")
 
@@ -125,13 +160,29 @@ class OpenRouterModelRegistry:
             # Add to model map
             model_map[config.model_name] = config
 
+            # Add the model_name itself as an alias for case-insensitive lookup
+            # But only if it's not already in the aliases list
+            model_name_lower = config.model_name.lower()
+            aliases_lower = [alias.lower() for alias in config.aliases]
+
+            if model_name_lower not in aliases_lower:
+                if model_name_lower in alias_map:
+                    existing_model = alias_map[model_name_lower]
+                    if existing_model != config.model_name:
+                        raise ValueError(
+                            f"Duplicate model name '{config.model_name}' (case-insensitive) found for models "
+                            f"'{existing_model}' and '{config.model_name}'"
+                        )
+                else:
+                    alias_map[model_name_lower] = config.model_name
+
             # Add aliases
             for alias in config.aliases:
                 alias_lower = alias.lower()
                 if alias_lower in alias_map:
                     existing_model = alias_map[alias_lower]
                     raise ValueError(
-                        f"Duplicate alias '{alias}' found for models " f"'{existing_model}' and '{config.model_name}'"
+                        f"Duplicate alias '{alias}' found for models '{existing_model}' and '{config.model_name}'"
                     )
                 alias_map[alias_lower] = config.model_name
 
@@ -148,14 +199,13 @@ class OpenRouterModelRegistry:
         Returns:
             Model configuration if found, None otherwise
         """
-        # Try alias first (case-insensitive)
+        # Try alias lookup (case-insensitive) - this now includes model names too
         alias_lower = name_or_alias.lower()
         if alias_lower in self.alias_map:
             model_name = self.alias_map[alias_lower]
             return self.model_map.get(model_name)
 
-        # Try as direct model name
-        return self.model_map.get(name_or_alias)
+        return None
 
     def get_capabilities(self, name_or_alias: str) -> Optional[ModelCapabilities]:
         """Get model capabilities for a name or alias.

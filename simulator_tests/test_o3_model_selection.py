@@ -27,8 +27,8 @@ class O3ModelSelectionTest(BaseSimulatorTest):
     def get_recent_server_logs(self) -> str:
         """Get recent server logs from the log file directly"""
         try:
-            # Read logs directly from the log file - more reliable than docker logs --since
-            cmd = ["docker", "exec", self.container_name, "tail", "-n", "200", "/tmp/mcp_server.log"]
+            # Read logs directly from the log file - use more lines to ensure we get all test-related logs
+            cmd = ["docker", "exec", self.container_name, "tail", "-n", "500", "/tmp/mcp_server.log"]
             result = subprocess.run(cmd, capture_output=True, text=True)
 
             if result.returncode == 0:
@@ -70,6 +70,15 @@ class O3ModelSelectionTest(BaseSimulatorTest):
             if has_openrouter and not has_openai:
                 self.logger.info("  ℹ️  Only OpenRouter configured - O3 models will be routed through OpenRouter")
                 return self._run_openrouter_o3_test()
+
+            # If neither OpenAI nor OpenRouter is configured, skip the test
+            if not has_openai and not has_openrouter:
+                self.logger.info("  ⚠️  Neither OpenAI nor OpenRouter API keys configured - skipping test")
+                self.logger.info(
+                    "  ℹ️  This test requires either OPENAI_API_KEY or OPENROUTER_API_KEY to be set in .env"
+                )
+                self.logger.info("  ✅ Test skipped (no API keys configured)")
+                return True  # Return True to indicate test passed/skipped
 
             # Original test for when OpenAI is configured
             self.logger.info("  ℹ️  OpenAI API configured - expecting direct OpenAI API calls")
@@ -173,7 +182,7 @@ def multiply(x, y):
             openai_model_usage = len(openai_model_logs) >= 3  # Should see 3 model usage logs
             openai_responses_received = len(openai_response_logs) >= 3  # Should see 3 responses
             chat_calls_to_openai = len(chat_openai_logs) >= 2  # Should see 2 chat calls (o3 + o3-mini)
-            codereview_calls_to_openai = len(codereview_openai_logs) >= 1  # Should see 1 codereview call
+            codereview_calls_to_openai = len(codereview_openai_logs) >= 1  # Should see 1 codereview call (o3)
 
             self.logger.info(f"   OpenAI API call logs: {len(openai_api_logs)}")
             self.logger.info(f"   OpenAI model usage logs: {len(openai_model_logs)}")

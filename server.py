@@ -24,6 +24,7 @@ import os
 import sys
 import time
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from typing import Any
 
 from mcp.server import Server
@@ -43,13 +44,16 @@ from tools import (
     CodeReviewTool,
     DebugIssueTool,
     Precommit,
+    RefactorTool,
+    TestGenerationTool,
     ThinkDeepTool,
+    TracerTool,
 )
 from tools.models import ToolOutput
 
 # Configure logging for server operations
 # Can be controlled via LOG_LEVEL environment variable (DEBUG, INFO, WARNING, ERROR)
-log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+log_level = os.getenv("LOG_LEVEL", "DEBUG").upper()
 
 # Create timezone-aware formatter
 
@@ -68,31 +72,63 @@ class LocalTimeFormatter(logging.Formatter):
 
 # Configure both console and file logging
 log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-logging.basicConfig(
-    level=getattr(logging, log_level, logging.INFO),
-    format=log_format,
-    force=True,  # Force reconfiguration if already configured
-    stream=sys.stderr,  # Use stderr to avoid interfering with MCP stdin/stdout protocol
-)
 
-# Apply local time formatter to root logger
-for handler in logging.getLogger().handlers:
-    handler.setFormatter(LocalTimeFormatter(log_format))
+# Clear any existing handlers first
+root_logger = logging.getLogger()
+root_logger.handlers.clear()
 
-# Add file handler for Docker log monitoring
+# Create and configure stderr handler explicitly
+stderr_handler = logging.StreamHandler(sys.stderr)
+stderr_handler.setLevel(getattr(logging, log_level, logging.INFO))
+stderr_handler.setFormatter(LocalTimeFormatter(log_format))
+root_logger.addHandler(stderr_handler)
+
+# Note: MCP stdio_server interferes with stderr during tool execution
+# All logs are properly written to /tmp/mcp_server.log for monitoring
+
+# Set root logger level
+root_logger.setLevel(getattr(logging, log_level, logging.INFO))
+
+# Add rotating file handler for Docker log monitoring
+
 try:
-    file_handler = logging.FileHandler("/tmp/mcp_server.log")
+    # Main server log with size-based rotation (20MB max per file)
+    # This ensures logs don't grow indefinitely and are properly managed
+    file_handler = RotatingFileHandler(
+        "/tmp/mcp_server.log",
+        maxBytes=20 * 1024 * 1024,  # 20MB max file size
+        backupCount=10,  # Keep 10 rotated files (200MB total)
+        encoding="utf-8",
+    )
     file_handler.setLevel(getattr(logging, log_level, logging.INFO))
     file_handler.setFormatter(LocalTimeFormatter(log_format))
     logging.getLogger().addHandler(file_handler)
 
-    # Create a special logger for MCP activity tracking
+    # Create a special logger for MCP activity tracking with size-based rotation
     mcp_logger = logging.getLogger("mcp_activity")
-    mcp_file_handler = logging.FileHandler("/tmp/mcp_activity.log")
+    mcp_file_handler = RotatingFileHandler(
+        "/tmp/mcp_activity.log",
+        maxBytes=20 * 1024 * 1024,  # 20MB max file size
+        backupCount=5,  # Keep 5 rotated files (100MB total)
+        encoding="utf-8",
+    )
     mcp_file_handler.setLevel(logging.INFO)
     mcp_file_handler.setFormatter(LocalTimeFormatter("%(asctime)s - %(message)s"))
     mcp_logger.addHandler(mcp_file_handler)
     mcp_logger.setLevel(logging.INFO)
+    # Ensure MCP activity also goes to stderr
+    mcp_logger.propagate = True
+
+    # Also keep a size-based rotation as backup (100MB max per file)
+    # This prevents any single day's log from growing too large
+    size_handler = RotatingFileHandler(
+        "/tmp/mcp_server_overflow.log",
+        maxBytes=100 * 1024 * 1024,
+        backupCount=3,  # 100MB
+    )
+    size_handler.setLevel(logging.WARNING)  # Only warnings and errors
+    size_handler.setFormatter(LocalTimeFormatter(log_format))
+    logging.getLogger().addHandler(size_handler)
 
 except Exception as e:
     print(f"Warning: Could not set up file logging: {e}", file=sys.stderr)
@@ -113,6 +149,9 @@ TOOLS = {
     "analyze": AnalyzeTool(),  # General-purpose file and code analysis
     "chat": ChatTool(),  # Interactive development chat and brainstorming
     "precommit": Precommit(),  # Pre-commit validation of git changes
+    "testgen": TestGenerationTool(),  # Comprehensive test generation with edge case coverage
+    "refactor": RefactorTool(),  # Intelligent code refactoring suggestions with precise line references
+    "tracer": TracerTool(),  # Static call path prediction and control flow analysis
 }
 
 
@@ -128,13 +167,17 @@ def configure_providers():
     """
     from providers import ModelProviderRegistry
     from providers.base import ProviderType
+    from providers.custom import CustomProvider
     from providers.gemini import GeminiModelProvider
     from providers.openai import OpenAIModelProvider
     from providers.openrouter import OpenRouterProvider
+    from providers.xai import XAIModelProvider
+    from utils.model_restrictions import get_restriction_service
 
     valid_providers = []
     has_native_apis = False
     has_openrouter = False
+    has_custom = False
 
     # Check for Gemini API key
     gemini_key = os.getenv("GEMINI_API_KEY")
@@ -150,6 +193,13 @@ def configure_providers():
         has_native_apis = True
         logger.info("OpenAI API key found - o3 model available")
 
+    # Check for X.AI API key
+    xai_key = os.getenv("XAI_API_KEY")
+    if xai_key and xai_key != "your_xai_api_key_here":
+        valid_providers.append("X.AI (GROK)")
+        has_native_apis = True
+        logger.info("X.AI API key found - GROK models available")
+
     # Check for OpenRouter API key
     openrouter_key = os.getenv("OPENROUTER_API_KEY")
     if openrouter_key and openrouter_key != "your_openrouter_api_key_here":
@@ -157,31 +207,110 @@ def configure_providers():
         has_openrouter = True
         logger.info("OpenRouter API key found - Multiple models available via OpenRouter")
 
-    # Register providers - native APIs first to ensure they take priority
+    # Check for custom API endpoint (Ollama, vLLM, etc.)
+    custom_url = os.getenv("CUSTOM_API_URL")
+    if custom_url:
+        # IMPORTANT: Always read CUSTOM_API_KEY even if empty
+        # - Some providers (vLLM, LM Studio, enterprise APIs) require authentication
+        # - Others (Ollama) work without authentication (empty key)
+        # - DO NOT remove this variable - it's needed for provider factory function
+        custom_key = os.getenv("CUSTOM_API_KEY", "")  # Default to empty (Ollama doesn't need auth)
+        custom_model = os.getenv("CUSTOM_MODEL_NAME", "llama3.2")
+        valid_providers.append(f"Custom API ({custom_url})")
+        has_custom = True
+        logger.info(f"Custom API endpoint found: {custom_url} with model {custom_model}")
+        if custom_key:
+            logger.debug("Custom API key provided for authentication")
+        else:
+            logger.debug("No custom API key provided (using unauthenticated access)")
+
+    # Register providers in priority order:
+    # 1. Native APIs first (most direct and efficient)
     if has_native_apis:
         if gemini_key and gemini_key != "your_gemini_api_key_here":
             ModelProviderRegistry.register_provider(ProviderType.GOOGLE, GeminiModelProvider)
         if openai_key and openai_key != "your_openai_api_key_here":
             ModelProviderRegistry.register_provider(ProviderType.OPENAI, OpenAIModelProvider)
+        if xai_key and xai_key != "your_xai_api_key_here":
+            ModelProviderRegistry.register_provider(ProviderType.XAI, XAIModelProvider)
 
-    # Register OpenRouter last so native APIs take precedence
+    # 2. Custom provider second (for local/private models)
+    if has_custom:
+        # Factory function that creates CustomProvider with proper parameters
+        def custom_provider_factory(api_key=None):
+            # api_key is CUSTOM_API_KEY (can be empty for Ollama), base_url from CUSTOM_API_URL
+            base_url = os.getenv("CUSTOM_API_URL", "")
+            return CustomProvider(api_key=api_key or "", base_url=base_url)  # Use provided API key or empty string
+
+        ModelProviderRegistry.register_provider(ProviderType.CUSTOM, custom_provider_factory)
+
+    # 3. OpenRouter last (catch-all for everything else)
     if has_openrouter:
         ModelProviderRegistry.register_provider(ProviderType.OPENROUTER, OpenRouterProvider)
 
     # Require at least one valid provider
     if not valid_providers:
         raise ValueError(
-            "At least one API key is required. Please set either:\n"
+            "At least one API configuration is required. Please set either:\n"
             "- GEMINI_API_KEY for Gemini models\n"
             "- OPENAI_API_KEY for OpenAI o3 model\n"
-            "- OPENROUTER_API_KEY for OpenRouter (multiple models)"
+            "- XAI_API_KEY for X.AI GROK models\n"
+            "- OPENROUTER_API_KEY for OpenRouter (multiple models)\n"
+            "- CUSTOM_API_URL for local models (Ollama, vLLM, etc.)"
         )
 
     logger.info(f"Available providers: {', '.join(valid_providers)}")
 
-    # Log provider priority if both are configured
-    if has_native_apis and has_openrouter:
-        logger.info("Provider priority: Native APIs (Gemini, OpenAI) will be checked before OpenRouter")
+    # Log provider priority
+    priority_info = []
+    if has_native_apis:
+        priority_info.append("Native APIs (Gemini, OpenAI)")
+    if has_custom:
+        priority_info.append("Custom endpoints")
+    if has_openrouter:
+        priority_info.append("OpenRouter (catch-all)")
+
+    if len(priority_info) > 1:
+        logger.info(f"Provider priority: {' → '.join(priority_info)}")
+
+    # Check and log model restrictions
+    restriction_service = get_restriction_service()
+    restrictions = restriction_service.get_restriction_summary()
+
+    if restrictions:
+        logger.info("Model restrictions configured:")
+        for provider_name, allowed_models in restrictions.items():
+            if isinstance(allowed_models, list):
+                logger.info(f"  {provider_name}: {', '.join(allowed_models)}")
+            else:
+                logger.info(f"  {provider_name}: {allowed_models}")
+
+        # Validate restrictions against known models
+        provider_instances = {}
+        for provider_type in [ProviderType.GOOGLE, ProviderType.OPENAI]:
+            provider = ModelProviderRegistry.get_provider(provider_type)
+            if provider:
+                provider_instances[provider_type] = provider
+
+        if provider_instances:
+            restriction_service.validate_against_known_models(provider_instances)
+    else:
+        logger.info("No model restrictions configured - all models allowed")
+
+    # Check if auto mode has any models available after restrictions
+    from config import IS_AUTO_MODE
+
+    if IS_AUTO_MODE:
+        available_models = ModelProviderRegistry.get_available_models(respect_restrictions=True)
+        if not available_models:
+            logger.error(
+                "Auto mode is enabled but no models are available after applying restrictions. "
+                "Please check your OPENAI_ALLOWED_MODELS and GOOGLE_ALLOWED_MODELS settings."
+            )
+            raise ValueError(
+                "No models available for auto mode due to restrictions. "
+                "Please adjust your allowed model settings or disable auto mode."
+            )
 
 
 @server.list_tools()
@@ -216,7 +345,7 @@ async def handle_list_tools() -> list[Tool]:
     tools.extend(
         [
             Tool(
-                name="get_version",
+                name="version",
                 description=(
                     "VERSION & CONFIGURATION - Get server version, configuration details, "
                     "and list of available tools. Useful for debugging and understanding capabilities."
@@ -235,20 +364,57 @@ async def handle_call_tool(name: str, arguments: dict[str, Any]) -> list[TextCon
     """
     Handle incoming tool execution requests from MCP clients.
 
-    This is the main request dispatcher that routes tool calls to their
-    appropriate handlers. It supports both AI-powered tools (from TOOLS registry)
-    and utility tools (implemented as static functions).
+    This is the main request dispatcher that routes tool calls to their appropriate handlers.
+    It supports both AI-powered tools (from TOOLS registry) and utility tools (implemented as
+    static functions).
 
-    Thread Context Reconstruction:
-    If the request contains a continuation_id, this function reconstructs
-    the conversation history and injects it into the tool's context.
+    CONVERSATION LIFECYCLE MANAGEMENT:
+    This function serves as the central orchestrator for multi-turn AI-to-AI conversations:
+
+    1. THREAD RESUMPTION: When continuation_id is present, it reconstructs complete conversation
+       context from Redis including conversation history and file references
+
+    2. CROSS-TOOL CONTINUATION: Enables seamless handoffs between different tools (analyze →
+       codereview → debug) while preserving full conversation context and file references
+
+    3. CONTEXT INJECTION: Reconstructed conversation history is embedded into tool prompts
+       using the dual prioritization strategy:
+       - Files: Newest-first prioritization (recent file versions take precedence)
+       - Turns: Newest-first collection for token efficiency, chronological presentation for LLM
+
+    4. FOLLOW-UP GENERATION: After tool execution, generates continuation offers for ongoing
+       AI-to-AI collaboration with natural language instructions
+
+    STATELESS TO STATEFUL BRIDGE:
+    The MCP protocol is inherently stateless, but this function bridges the gap by:
+    - Loading persistent conversation state from Redis
+    - Reconstructing full multi-turn context for tool execution
+    - Enabling tools to access previous exchanges and file references
+    - Supporting conversation chains across different tool types
 
     Args:
-        name: The name of the tool to execute
-        arguments: Dictionary of arguments to pass to the tool
+        name: The name of the tool to execute (e.g., "analyze", "chat", "codereview")
+        arguments: Dictionary of arguments to pass to the tool, potentially including:
+                  - continuation_id: UUID for conversation thread resumption
+                  - files: File paths for analysis (subject to deduplication)
+                  - prompt: User request or follow-up question
+                  - model: Specific AI model to use (optional)
 
     Returns:
-        List of TextContent objects containing the tool's response
+        List of TextContent objects containing:
+        - Tool's primary response with analysis/results
+        - Continuation offers for follow-up conversations (when applicable)
+        - Structured JSON responses with status and content
+
+    Raises:
+        ValueError: If continuation_id is invalid or conversation thread not found
+        Exception: For tool-specific errors or execution failures
+
+    Example Conversation Flow:
+        1. Claude calls analyze tool with files → creates new thread
+        2. Thread ID returned in continuation offer
+        3. Claude continues with codereview tool + continuation_id → full context preserved
+        4. Multiple tools can collaborate using same thread ID
     """
     logger.info(f"MCP tool call: {name}")
     logger.debug(f"MCP tool arguments: {list(arguments.keys())}")
@@ -297,9 +463,9 @@ async def handle_call_tool(name: str, arguments: dict[str, Any]) -> list[TextCon
         return result
 
     # Route to utility tools that provide server information
-    elif name == "get_version":
+    elif name == "version":
         logger.info(f"Executing utility tool '{name}'")
-        result = await handle_get_version()
+        result = await handle_version()
         logger.info(f"Utility tool '{name}' execution completed")
         return result
 
@@ -363,16 +529,82 @@ Remember: Only suggest follow-ups when they would genuinely add value to the dis
 
 async def reconstruct_thread_context(arguments: dict[str, Any]) -> dict[str, Any]:
     """
-    Reconstruct conversation context for thread continuation.
+    Reconstruct conversation context for stateless-to-stateful thread continuation.
 
-    This function loads the conversation history from Redis and integrates it
-    into the request arguments to provide full context to the tool.
+    This is a critical function that transforms the inherently stateless MCP protocol into
+    stateful multi-turn conversations. It loads persistent conversation state from Redis
+    and rebuilds complete conversation context using the sophisticated dual prioritization
+    strategy implemented in the conversation memory system.
+
+    CONTEXT RECONSTRUCTION PROCESS:
+
+    1. THREAD RETRIEVAL: Loads complete ThreadContext from Redis using continuation_id
+       - Includes all conversation turns with tool attribution
+       - Preserves file references and cross-tool context
+       - Handles conversation chains across multiple linked threads
+
+    2. CONVERSATION HISTORY BUILDING: Uses build_conversation_history() to create
+       comprehensive context with intelligent prioritization:
+
+       FILE PRIORITIZATION (Newest-First Throughout):
+       - When same file appears in multiple turns, newest reference wins
+       - File embedding prioritizes recent versions, excludes older duplicates
+       - Token budget management ensures most relevant files are preserved
+
+       CONVERSATION TURN PRIORITIZATION (Dual Strategy):
+       - Collection Phase: Processes turns newest-to-oldest for token efficiency
+       - Presentation Phase: Presents turns chronologically for LLM understanding
+       - Ensures recent context is preserved when token budget is constrained
+
+    3. CONTEXT INJECTION: Embeds reconstructed history into tool request arguments
+       - Conversation history becomes part of the tool's prompt context
+       - Files referenced in previous turns are accessible to current tool
+       - Cross-tool knowledge transfer is seamless and comprehensive
+
+    4. TOKEN BUDGET MANAGEMENT: Applies model-specific token allocation
+       - Balances conversation history vs. file content vs. response space
+       - Gracefully handles token limits with intelligent exclusion strategies
+       - Preserves most contextually relevant information within constraints
+
+    CROSS-TOOL CONTINUATION SUPPORT:
+    This function enables seamless handoffs between different tools:
+    - Analyze tool → Debug tool: Full file context and analysis preserved
+    - Chat tool → CodeReview tool: Conversation context maintained
+    - Any tool → Any tool: Complete cross-tool knowledge transfer
+
+    ERROR HANDLING & RECOVERY:
+    - Thread expiration: Provides clear instructions for conversation restart
+    - Redis unavailability: Graceful degradation with error messaging
+    - Invalid continuation_id: Security validation and user-friendly errors
 
     Args:
-        arguments: Original request arguments containing continuation_id
+        arguments: Original request arguments dictionary containing:
+                  - continuation_id (required): UUID of conversation thread to resume
+                  - Other tool-specific arguments that will be preserved
 
     Returns:
-        Modified arguments with conversation history injected
+        dict[str, Any]: Enhanced arguments dictionary with conversation context:
+        - Original arguments preserved
+        - Conversation history embedded in appropriate format for tool consumption
+        - File context from previous turns made accessible
+        - Cross-tool knowledge transfer enabled
+
+    Raises:
+        ValueError: When continuation_id is invalid, thread not found, or expired
+                   Includes user-friendly recovery instructions
+
+    Performance Characteristics:
+        - O(1) thread lookup in Redis
+        - O(n) conversation history reconstruction where n = number of turns
+        - Intelligent token budgeting prevents context window overflow
+        - Optimized file deduplication minimizes redundant content
+
+    Example Usage Flow:
+        1. Claude: "Continue analyzing the security issues" + continuation_id
+        2. reconstruct_thread_context() loads previous analyze conversation
+        3. Debug tool receives full context including previous file analysis
+        4. Debug tool can reference specific findings from analyze tool
+        5. Natural cross-tool collaboration without context loss
     """
     from utils.conversation_memory import add_turn, build_conversation_history, get_thread
 
@@ -499,7 +731,7 @@ async def reconstruct_thread_context(arguments: dict[str, Any]) -> dict[str, Any
     return enhanced_arguments
 
 
-async def handle_get_version() -> list[TextContent]:
+async def handle_version() -> list[TextContent]:
     """
     Get comprehensive version and configuration information about the server.
 
@@ -523,7 +755,7 @@ async def handle_get_version() -> list[TextContent]:
         "max_context_tokens": "Dynamic (model-specific)",
         "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         "server_started": datetime.now().isoformat(),
-        "available_tools": list(TOOLS.keys()) + ["get_version"],
+        "available_tools": list(TOOLS.keys()) + ["version"],
     }
 
     # Check configured providers
@@ -536,7 +768,7 @@ async def handle_get_version() -> list[TextContent]:
     if ModelProviderRegistry.get_provider(ProviderType.OPENAI):
         configured_providers.append("OpenAI (o3, o3-mini)")
     if ModelProviderRegistry.get_provider(ProviderType.OPENROUTER):
-        configured_providers.append("OpenRouter (configured via conf/openrouter_models.json)")
+        configured_providers.append("OpenRouter (configured via conf/custom_models.json)")
 
     # Format the information in a human-readable way
     text = f"""Zen MCP Server v{__version__}
@@ -559,7 +791,7 @@ Available Tools:
 For updates, visit: https://github.com/BeehiveInnovations/zen-mcp-server"""
 
     # Create standardized tool output
-    tool_output = ToolOutput(status="success", content=text, content_type="text", metadata={"tool_name": "get_version"})
+    tool_output = ToolOutput(status="success", content=text, content_type="text", metadata={"tool_name": "version"})
 
     return [TextContent(type="text", text=tool_output.model_dump_json())]
 

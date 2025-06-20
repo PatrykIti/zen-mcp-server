@@ -1,11 +1,15 @@
 """Gemini model provider implementation."""
 
+import logging
+import time
 from typing import Optional
 
 from google import genai
 from google.genai import types
 
 from .base import ModelCapabilities, ModelProvider, ModelResponse, ProviderType, RangeTemperatureConstraint
+
+logger = logging.getLogger(__name__)
 
 
 class GeminiModelProvider(ModelProvider):
@@ -58,6 +62,13 @@ class GeminiModelProvider(ModelProvider):
 
         if resolved_name not in self.SUPPORTED_MODELS:
             raise ValueError(f"Unsupported Gemini model: {model_name}")
+
+        # Check if model is allowed by restrictions
+        from utils.model_restrictions import get_restriction_service
+
+        restriction_service = get_restriction_service()
+        if not restriction_service.is_allowed(ProviderType.GOOGLE, resolved_name, model_name):
+            raise ValueError(f"Gemini model '{model_name}' is not allowed by restriction policy.")
 
         config = self.SUPPORTED_MODELS[resolved_name]
 
@@ -117,35 +128,74 @@ class GeminiModelProvider(ModelProvider):
                 actual_thinking_budget = int(max_thinking_tokens * self.THINKING_BUDGETS[thinking_mode])
                 generation_config.thinking_config = types.ThinkingConfig(thinking_budget=actual_thinking_budget)
 
-        try:
-            # Generate content
-            response = self.client.models.generate_content(
-                model=resolved_name,
-                contents=full_prompt,
-                config=generation_config,
-            )
+        # Retry logic with exponential backoff
+        max_retries = 2  # Total of 2 attempts (1 initial + 1 retry)
+        base_delay = 1.0  # Start with 1 second delay
 
-            # Extract usage information if available
-            usage = self._extract_usage(response)
+        last_exception = None
 
-            return ModelResponse(
-                content=response.text,
-                usage=usage,
-                model_name=resolved_name,
-                friendly_name="Gemini",
-                provider=ProviderType.GOOGLE,
-                metadata={
-                    "thinking_mode": thinking_mode if capabilities.supports_extended_thinking else None,
-                    "finish_reason": (
-                        getattr(response.candidates[0], "finish_reason", "STOP") if response.candidates else "STOP"
-                    ),
-                },
-            )
+        for attempt in range(max_retries):
+            try:
+                # Generate content
+                response = self.client.models.generate_content(
+                    model=resolved_name,
+                    contents=full_prompt,
+                    config=generation_config,
+                )
 
-        except Exception as e:
-            # Log error and re-raise with more context
-            error_msg = f"Gemini API error for model {resolved_name}: {str(e)}"
-            raise RuntimeError(error_msg) from e
+                # Extract usage information if available
+                usage = self._extract_usage(response)
+
+                return ModelResponse(
+                    content=response.text,
+                    usage=usage,
+                    model_name=resolved_name,
+                    friendly_name="Gemini",
+                    provider=ProviderType.GOOGLE,
+                    metadata={
+                        "thinking_mode": thinking_mode if capabilities.supports_extended_thinking else None,
+                        "finish_reason": (
+                            getattr(response.candidates[0], "finish_reason", "STOP") if response.candidates else "STOP"
+                        ),
+                    },
+                )
+
+            except Exception as e:
+                last_exception = e
+
+                # Check if this is a retryable error
+                error_str = str(e).lower()
+                is_retryable = any(
+                    term in error_str
+                    for term in [
+                        "timeout",
+                        "connection",
+                        "network",
+                        "temporary",
+                        "unavailable",
+                        "retry",
+                        "429",
+                        "500",
+                        "502",
+                        "503",
+                        "504",
+                    ]
+                )
+
+                # If this is the last attempt or not retryable, give up
+                if attempt == max_retries - 1 or not is_retryable:
+                    break
+
+                # Calculate delay with exponential backoff
+                delay = base_delay * (2**attempt)
+
+                # Log retry attempt (could add logging here if needed)
+                # For now, just sleep and retry
+                time.sleep(delay)
+
+        # If we get here, all retries failed
+        error_msg = f"Gemini API error for model {resolved_name} after {max_retries} attempts: {str(last_exception)}"
+        raise RuntimeError(error_msg) from last_exception
 
     def count_tokens(self, text: str, model_name: str) -> int:
         """Count tokens for the given text using Gemini's tokenizer."""
@@ -161,9 +211,22 @@ class GeminiModelProvider(ModelProvider):
         return ProviderType.GOOGLE
 
     def validate_model_name(self, model_name: str) -> bool:
-        """Validate if the model name is supported."""
+        """Validate if the model name is supported and allowed."""
         resolved_name = self._resolve_model_name(model_name)
-        return resolved_name in self.SUPPORTED_MODELS and isinstance(self.SUPPORTED_MODELS[resolved_name], dict)
+
+        # First check if model is supported
+        if resolved_name not in self.SUPPORTED_MODELS or not isinstance(self.SUPPORTED_MODELS[resolved_name], dict):
+            return False
+
+        # Then check if model is allowed by restrictions
+        from utils.model_restrictions import get_restriction_service
+
+        restriction_service = get_restriction_service()
+        if not restriction_service.is_allowed(ProviderType.GOOGLE, resolved_name, model_name):
+            logger.debug(f"Gemini model '{model_name}' -> '{resolved_name}' blocked by restrictions")
+            return False
+
+        return True
 
     def supports_thinking_mode(self, model_name: str) -> bool:
         """Check if the model supports extended thinking mode."""

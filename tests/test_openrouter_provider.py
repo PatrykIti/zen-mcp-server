@@ -1,7 +1,9 @@
 """Tests for OpenRouter provider."""
 
 import os
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+
+import pytest
 
 from providers.base import ProviderType
 from providers.openrouter import OpenRouterProvider
@@ -52,9 +54,9 @@ class TestOpenRouterProvider:
         provider = OpenRouterProvider(api_key="test-key")
 
         # Test with a model in the registry (using alias)
-        caps = provider.get_capabilities("gpt4o")
+        caps = provider.get_capabilities("o3")
         assert caps.provider == ProviderType.OPENROUTER
-        assert caps.model_name == "openai/gpt-4o"  # Resolved name
+        assert caps.model_name == "openai/o3"  # Resolved name
         assert caps.friendly_name == "OpenRouter"
 
         # Test with a model not in registry - should get generic capabilities
@@ -71,22 +73,25 @@ class TestOpenRouterProvider:
         # Test alias resolution
         assert provider._resolve_model_name("opus") == "anthropic/claude-3-opus"
         assert provider._resolve_model_name("sonnet") == "anthropic/claude-3-sonnet"
-        assert provider._resolve_model_name("gpt4o") == "openai/gpt-4o"
-        assert provider._resolve_model_name("4o") == "openai/gpt-4o"
+        assert provider._resolve_model_name("o3") == "openai/o3"
+        assert provider._resolve_model_name("o3-mini") == "openai/o3-mini"
+        assert provider._resolve_model_name("o3mini") == "openai/o3-mini"
+        assert provider._resolve_model_name("o4-mini") == "openai/o4-mini"
+        assert provider._resolve_model_name("o4-mini-high") == "openai/o4-mini-high"
         assert provider._resolve_model_name("claude") == "anthropic/claude-3-sonnet"
         assert provider._resolve_model_name("mistral") == "mistral/mistral-large"
-        assert provider._resolve_model_name("deepseek") == "deepseek/deepseek-coder"
-        assert provider._resolve_model_name("coder") == "deepseek/deepseek-coder"
+        assert provider._resolve_model_name("deepseek") == "deepseek/deepseek-r1-0528"
+        assert provider._resolve_model_name("r1") == "deepseek/deepseek-r1-0528"
 
         # Test case-insensitive
         assert provider._resolve_model_name("OPUS") == "anthropic/claude-3-opus"
-        assert provider._resolve_model_name("GPT4O") == "openai/gpt-4o"
+        assert provider._resolve_model_name("O3") == "openai/o3"
         assert provider._resolve_model_name("Mistral") == "mistral/mistral-large"
         assert provider._resolve_model_name("CLAUDE") == "anthropic/claude-3-sonnet"
 
         # Test direct model names (should pass through unchanged)
         assert provider._resolve_model_name("anthropic/claude-3-opus") == "anthropic/claude-3-opus"
-        assert provider._resolve_model_name("openai/gpt-4o") == "openai/gpt-4o"
+        assert provider._resolve_model_name("openai/o3") == "openai/o3"
 
         # Test unknown models pass through
         assert provider._resolve_model_name("unknown-model") == "unknown-model"
@@ -107,6 +112,138 @@ class TestOpenRouterProvider:
             assert isinstance(provider, OpenRouterProvider)
 
 
+class TestOpenRouterAutoMode:
+    """Test auto mode functionality when only OpenRouter is configured."""
+
+    def setup_method(self):
+        """Store original state before each test."""
+        self.registry = ModelProviderRegistry()
+        self._original_providers = self.registry._providers.copy()
+        self._original_initialized = self.registry._initialized_providers.copy()
+
+        self.registry._providers.clear()
+        self.registry._initialized_providers.clear()
+
+        self._original_env = {}
+        for key in ["OPENROUTER_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "DEFAULT_MODEL"]:
+            self._original_env[key] = os.environ.get(key)
+
+    def teardown_method(self):
+        """Restore original state after each test."""
+        self.registry._providers.clear()
+        self.registry._initialized_providers.clear()
+        self.registry._providers.update(self._original_providers)
+        self.registry._initialized_providers.update(self._original_initialized)
+
+        for key, value in self._original_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    @pytest.mark.no_mock_provider
+    def test_openrouter_only_auto_mode(self):
+        """Test that auto mode works when only OpenRouter is configured."""
+        os.environ.pop("GEMINI_API_KEY", None)
+        os.environ.pop("OPENAI_API_KEY", None)
+        os.environ["OPENROUTER_API_KEY"] = "test-openrouter-key"
+        os.environ["DEFAULT_MODEL"] = "auto"
+
+        mock_registry = Mock()
+        mock_registry.list_models.return_value = [
+            "google/gemini-2.5-flash-preview-05-20",
+            "google/gemini-2.5-pro-preview-06-05",
+            "openai/o3",
+            "openai/o3-mini",
+            "anthropic/claude-3-opus",
+            "anthropic/claude-3-sonnet",
+        ]
+
+        ModelProviderRegistry.register_provider(ProviderType.OPENROUTER, OpenRouterProvider)
+
+        provider = ModelProviderRegistry.get_provider(ProviderType.OPENROUTER)
+        assert provider is not None, "OpenRouter provider should be available with API key"
+        provider._registry = mock_registry
+
+        available_models = ModelProviderRegistry.get_available_models(respect_restrictions=True)
+
+        assert len(available_models) > 0, "Should find OpenRouter models in auto mode"
+        assert all(provider_type == ProviderType.OPENROUTER for provider_type in available_models.values())
+
+        expected_models = mock_registry.list_models()
+        for model in expected_models:
+            assert model in available_models, f"Model {model} should be available"
+
+    @pytest.mark.no_mock_provider
+    def test_openrouter_with_restrictions(self):
+        """Test that OpenRouter respects model restrictions."""
+        os.environ.pop("GEMINI_API_KEY", None)
+        os.environ.pop("OPENAI_API_KEY", None)
+        os.environ["OPENROUTER_API_KEY"] = "test-openrouter-key"
+        os.environ.pop("OPENROUTER_ALLOWED_MODELS", None)
+        os.environ["OPENROUTER_ALLOWED_MODELS"] = "anthropic/claude-3-opus,google/gemini-2.5-flash-preview-05-20"
+        os.environ["DEFAULT_MODEL"] = "auto"
+
+        # Force reload to pick up new environment variable
+        import utils.model_restrictions
+
+        utils.model_restrictions._restriction_service = None
+
+        mock_registry = Mock()
+        mock_registry.list_models.return_value = [
+            "google/gemini-2.5-flash-preview-05-20",
+            "google/gemini-2.5-pro-preview-06-05",
+            "anthropic/claude-3-opus",
+            "anthropic/claude-3-sonnet",
+        ]
+
+        ModelProviderRegistry.register_provider(ProviderType.OPENROUTER, OpenRouterProvider)
+
+        provider = ModelProviderRegistry.get_provider(ProviderType.OPENROUTER)
+        provider._registry = mock_registry
+
+        available_models = ModelProviderRegistry.get_available_models(respect_restrictions=True)
+
+        assert len(available_models) > 0, "Should have some allowed models"
+
+        expected_allowed = {"google/gemini-2.5-flash-preview-05-20", "anthropic/claude-3-opus"}
+
+        assert (
+            set(available_models.keys()) == expected_allowed
+        ), f"Expected {expected_allowed}, but got {set(available_models.keys())}"
+
+    @pytest.mark.no_mock_provider
+    def test_no_providers_fails_auto_mode(self):
+        """Test that auto mode fails gracefully when no providers are available."""
+        os.environ.pop("GEMINI_API_KEY", None)
+        os.environ.pop("OPENAI_API_KEY", None)
+        os.environ.pop("OPENROUTER_API_KEY", None)
+        os.environ["DEFAULT_MODEL"] = "auto"
+
+        available_models = ModelProviderRegistry.get_available_models(respect_restrictions=True)
+
+        assert len(available_models) == 0, "Should have no models when no providers are configured"
+
+    @pytest.mark.no_mock_provider
+    def test_openrouter_without_registry(self):
+        """Test that OpenRouter without _registry attribute doesn't crash."""
+        os.environ.pop("GEMINI_API_KEY", None)
+        os.environ.pop("OPENAI_API_KEY", None)
+        os.environ["OPENROUTER_API_KEY"] = "test-openrouter-key"
+        os.environ["DEFAULT_MODEL"] = "auto"
+
+        mock_provider_class = Mock()
+        mock_provider_instance = Mock(spec=["get_provider_type"])
+        mock_provider_instance.get_provider_type.return_value = ProviderType.OPENROUTER
+        mock_provider_class.return_value = mock_provider_instance
+
+        ModelProviderRegistry.register_provider(ProviderType.OPENROUTER, mock_provider_class)
+
+        available_models = ModelProviderRegistry.get_available_models(respect_restrictions=True)
+
+        assert len(available_models) == 0, "Should have no models when OpenRouter has no registry"
+
+
 class TestOpenRouterRegistry:
     """Test cases for OpenRouter model registry."""
 
@@ -120,13 +257,13 @@ class TestOpenRouterRegistry:
         models = registry.list_models()
         assert len(models) > 0
         assert "anthropic/claude-3-opus" in models
-        assert "openai/gpt-4o" in models
+        assert "openai/o3" in models
 
         # Should have loaded aliases
         aliases = registry.list_aliases()
         assert len(aliases) > 0
         assert "opus" in aliases
-        assert "gpt4o" in aliases
+        assert "o3" in aliases
         assert "claude" in aliases
 
     def test_registry_capabilities(self):

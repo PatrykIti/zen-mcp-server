@@ -11,7 +11,9 @@ class ProviderType(Enum):
 
     GOOGLE = "google"
     OPENAI = "openai"
+    XAI = "xai"
     OPENROUTER = "openrouter"
+    CUSTOM = "custom"
 
 
 class TemperatureConstraint(ABC):
@@ -211,9 +213,7 @@ class ModelProvider(ABC):
         # Validate temperature
         min_temp, max_temp = capabilities.temperature_range
         if not min_temp <= temperature <= max_temp:
-            raise ValueError(
-                f"Temperature {temperature} out of range [{min_temp}, {max_temp}] " f"for model {model_name}"
-            )
+            raise ValueError(f"Temperature {temperature} out of range [{min_temp}, {max_temp}] for model {model_name}")
 
     @abstractmethod
     def supports_thinking_mode(self, model_name: str) -> bool:
