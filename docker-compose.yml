@@ -32,6 +32,14 @@ services:
       - OPENAI_ALLOWED_MODELS=${OPENAI_ALLOWED_MODELS:-}
       - GOOGLE_ALLOWED_MODELS=${GOOGLE_ALLOWED_MODELS:-}
       - XAI_ALLOWED_MODELS=${XAI_ALLOWED_MODELS:-}
+      - OPENROUTER_ALLOWED_MODELS=${OPENROUTER_ALLOWED_MODELS:-}
+      
+      # OpenRouter custom headers
+      - OPENROUTER_REFERER=${OPENROUTER_REFERER:-}
+      - OPENROUTER_TITLE=${OPENROUTER_TITLE:-}
+      
+      # Custom models configuration path
+      - CUSTOM_MODELS_CONFIG_PATH=${CUSTOM_MODELS_CONFIG_PATH:-}
       
       # Workspace configuration
       - WORKSPACE_ROOT=${WORKSPACE_ROOT:-${HOME}}
