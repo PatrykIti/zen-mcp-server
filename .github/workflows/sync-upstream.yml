@@ -89,6 +89,95 @@ jobs:
             git commit --amend --no-edit
           }
           
+          # Append Docker usage section to README if it doesn't exist
+          if ! grep -q "## Docker Image Usage (Fork Enhancement)" README.md; then
+            cat >> README.md << 'DOCKER_SECTION'
+
+            ## Docker Image Usage (Fork Enhancement)
+
+            This fork maintains Docker support with pre-built images available at GitHub Container Registry.
+
+            ### Quick Start with Docker
+
+            **Basic Configuration (Gemini only):**
+            ```json
+            {
+              "mcpServers": {
+                "zen": {
+                  "command": "docker",
+                  "args": [
+                    "run", "--rm", "-i",
+                    "-e", "GEMINI_API_KEY",
+                    "-v", "${HOME}:${HOME}",
+                    "ghcr.io/patrykiti/zen-mcp-server:latest"
+                  ],
+                  "env": {
+                    "GEMINI_API_KEY": "<your_api_key_from_google_ai_studio>"
+                  }
+                }
+              }
+            }
+            ```
+
+            **Full Configuration (All Providers):**
+            ```json
+            {
+              "mcpServers": {
+                "zen": {
+                  "command": "docker",
+                  "args": [
+                    "run", "--rm", "-i",
+                    "-e", "GEMINI_API_KEY",
+                    "-e", "OPENAI_API_KEY",
+                    "-e", "XAI_API_KEY",
+                    "-e", "OPENROUTER_API_KEY",
+                    "-e", "CUSTOM_API_URL",
+                    "-e", "CUSTOM_API_KEY",
+                    "-e", "CUSTOM_MODEL_NAME",
+                    "-e", "DEFAULT_MODEL",
+                    "-v", "${HOME}:${HOME}",
+                    "ghcr.io/patrykiti/zen-mcp-server:latest"
+                  ],
+                  "env": {
+                    "GEMINI_API_KEY": "<your-gemini-key>",
+                    "OPENAI_API_KEY": "<your-openai-key>",
+                    "XAI_API_KEY": "<your-xai-key>",
+                    "OPENROUTER_API_KEY": "<your-openrouter-key>",
+                    "CUSTOM_API_URL": "http://host.docker.internal:11434/v1",
+                    "CUSTOM_API_KEY": "",
+                    "CUSTOM_MODEL_NAME": "llama3.2",
+                    "DEFAULT_MODEL": "auto"
+                  }
+                }
+              }
+            }
+            ```
+
+            ### Using Docker Compose
+
+            ```bash
+            # Clone the repository
+            git clone https://github.com/PatrykIti/zen-mcp-server.git
+            cd zen-mcp-server
+
+            # Create .env file with your API keys
+            cp .env.example .env
+            nano .env
+
+            # Start the server
+            docker-compose up -d
+            ```
+
+            ### Available Tags
+            - `ghcr.io/patrykiti/zen-mcp-server:latest` - Always the newest version
+            - `ghcr.io/patrykiti/zen-mcp-server:v5.2.4` - Specific version
+
+            For more details, see the [Docker setup guide](docker-compose.yml) in this repository.
+            DOCKER_SECTION
+            git add README.md
+            git commit --amend --no-edit
+          fi
+          
           # Push the branch
           git push origin $BRANCH_NAME
 
@@ -117,6 +206,7 @@ jobs:
             - .github/workflows/sync-upstream.yml
             - docker-compose.yml
             - Dockerfile
+          - README.md is updated from upstream with Docker section appended
           - Other workflows from upstream are included (test.yml, etc.)
           - This PR will be automatically merged
 
