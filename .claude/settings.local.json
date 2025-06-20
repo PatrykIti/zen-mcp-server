@@ -13,7 +13,9 @@
       "Bash(source:*)",
       "Bash(rm:*)",
       "Bash(gh repo view:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(git push:*)",
+      "Bash(git checkout:*)"
     ],
     "deny": []
   }
