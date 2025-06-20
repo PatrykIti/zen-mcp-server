@@ -40,9 +40,8 @@ multi-turn file handling:
 import json
 import logging
 import os
-import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 from .file_types import BINARY_EXTENSIONS, CODE_EXTENSIONS, IMAGE_EXTENSIONS, TEXT_EXTENSIONS
 from .security_config import EXCLUDED_DIRS, is_dangerous_path
