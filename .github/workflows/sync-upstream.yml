@@ -241,7 +241,7 @@ jobs:
         if: steps.check_updates.outputs.needs_update == 'true'
         id: create_pr
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT }}
+          GITHUB_TOKEN: ${{ secrets.PAT2 }}
         run: |
           BRANCH_NAME="${{ steps.create_branch.outputs.branch_name }}"
           
