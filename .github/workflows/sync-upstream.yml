@@ -45,7 +45,11 @@ jobs:
           echo "our_sha=$OUR_SHA" >> $GITHUB_OUTPUT
           echo "our_short=$OUR_SHORT" >> $GITHUB_OUTPUT
           
-          if [ "$UPSTREAM_SHA" = "$OUR_SHA" ]; then
+          # Count commits behind upstream
+          COMMITS_BEHIND=$(git rev-list --count origin/main..upstream/main)
+          echo "commits_behind=$COMMITS_BEHIND" >> $GITHUB_OUTPUT
+          
+          if [ "$COMMITS_BEHIND" -eq 0 ]; then
             echo "needs_update=false" >> $GITHUB_OUTPUT
             
             # Create nice summary for up-to-date status
@@ -59,11 +63,6 @@ jobs:
             echo "::notice title=Up-to-date::Repository is already synchronized with upstream (commit: $OUR_SHORT)"
           else
             echo "needs_update=true" >> $GITHUB_OUTPUT
-            
-            # Count commits behind
-            COMMITS_BEHIND=$(git rev-list --count origin/main..upstream/main)
-            echo "commits_behind=$COMMITS_BEHIND" >> $GITHUB_OUTPUT
-            
             echo "::notice title=Updates Available::Found $COMMITS_BEHIND new commits from upstream"
           fi
 
