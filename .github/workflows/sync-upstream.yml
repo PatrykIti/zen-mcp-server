@@ -64,10 +64,12 @@ jobs:
             # If merge still fails, use more aggressive approach
             echo "Standard merge failed, using reset approach..."
             
-            # Save our protected workflow files
+            # Save our protected files
             cp .github/workflows/auto-version.yml /tmp/auto-version.yml.bak 2>/dev/null || true
             cp .github/workflows/build_and_publish_docker.yml /tmp/build_and_publish_docker.yml.bak 2>/dev/null || true
             cp .github/workflows/sync-upstream.yml /tmp/sync-upstream.yml.bak 2>/dev/null || true
+            cp docker-compose.yml /tmp/docker-compose.yml.bak 2>/dev/null || true
+            cp Dockerfile /tmp/Dockerfile.bak 2>/dev/null || true
             
             # Force merge with theirs strategy
             git merge upstream/main --no-edit --strategy=ours --allow-unrelated-histories
@@ -75,13 +77,15 @@ jobs:
             # Checkout all files from upstream (including their workflows)
             git checkout upstream/main -- .
             
-            # Restore our protected workflows
+            # Restore our protected files
             cp /tmp/auto-version.yml.bak .github/workflows/auto-version.yml 2>/dev/null || true
             cp /tmp/build_and_publish_docker.yml.bak .github/workflows/build_and_publish_docker.yml 2>/dev/null || true
             cp /tmp/sync-upstream.yml.bak .github/workflows/sync-upstream.yml 2>/dev/null || true
+            cp /tmp/docker-compose.yml.bak docker-compose.yml 2>/dev/null || true
+            cp /tmp/Dockerfile.bak Dockerfile 2>/dev/null || true
             
-            # Add our protected workflows back
-            git add .github/workflows/auto-version.yml .github/workflows/build_and_publish_docker.yml .github/workflows/sync-upstream.yml
+            # Add our protected files back
+            git add .github/workflows/auto-version.yml .github/workflows/build_and_publish_docker.yml .github/workflows/sync-upstream.yml docker-compose.yml Dockerfile
             git commit --amend --no-edit
           }
           
@@ -107,7 +111,12 @@ jobs:
 
           ### Merge strategy:
           - All changes from upstream are automatically accepted
-          - Protected workflows are preserved: auto-version.yml, build_and_publish_docker.yml, sync-upstream.yml
+          - Protected files are preserved:
+            - .github/workflows/auto-version.yml
+            - .github/workflows/build_and_publish_docker.yml
+            - .github/workflows/sync-upstream.yml
+            - docker-compose.yml
+            - Dockerfile
           - Other workflows from upstream are included (test.yml, etc.)
           - This PR will be automatically merged
 
