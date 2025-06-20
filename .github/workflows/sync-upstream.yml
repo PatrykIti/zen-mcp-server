@@ -80,39 +80,49 @@ jobs:
           echo "Created branch: $BRANCH_NAME"
           echo "::endgroup::"
           
-          echo "::group::Merging upstream changes"
-          # Get list of changed files before merge
-          CHANGED_FILES=$(git diff --name-only origin/main upstream/main | head -20)
+          echo "::group::Backing up protected files"
+          # Create temp directory for backups
+          mkdir -p /tmp/protected_files/.github/workflows
           
-          # Merge upstream changes with strategy to always accept theirs
-          git merge upstream/main --no-edit --strategy-option=theirs || {
-            # If merge still fails, use more aggressive approach
-            echo "Standard merge failed, using reset approach..."
+          # Save our protected files
+          cp .github/workflows/auto-version.yml /tmp/protected_files/.github/workflows/ 2>/dev/null || true
+          cp .github/workflows/build_and_publish_docker.yml /tmp/protected_files/.github/workflows/ 2>/dev/null || true
+          cp .github/workflows/sync-upstream.yml /tmp/protected_files/.github/workflows/ 2>/dev/null || true
+          cp docker-compose.yml /tmp/protected_files/ 2>/dev/null || true
+          cp Dockerfile /tmp/protected_files/ 2>/dev/null || true
+          echo "::endgroup::"
+          
+          echo "::group::Merging upstream changes"
+          # First try a simple merge
+          if git merge upstream/main --no-edit --no-ff; then
+            echo "✅ Simple merge successful"
+          else
+            echo "⚠️ Merge conflicts detected, resolving..."
             
-            # Save our protected files
-            cp .github/workflows/auto-version.yml /tmp/auto-version.yml.bak 2>/dev/null || true
-            cp .github/workflows/build_and_publish_docker.yml /tmp/build_and_publish_docker.yml.bak 2>/dev/null || true
-            cp .github/workflows/sync-upstream.yml /tmp/sync-upstream.yml.bak 2>/dev/null || true
-            cp docker-compose.yml /tmp/docker-compose.yml.bak 2>/dev/null || true
-            cp Dockerfile /tmp/Dockerfile.bak 2>/dev/null || true
+            # Reset to start fresh
+            git merge --abort 2>/dev/null || true
             
-            # Force merge with theirs strategy
-            git merge upstream/main --no-edit --strategy=ours --allow-unrelated-histories
-            
-            # Checkout all files from upstream (including their workflows)
-            git checkout upstream/main -- .
-            
-            # Restore our protected files
-            cp /tmp/auto-version.yml.bak .github/workflows/auto-version.yml 2>/dev/null || true
-            cp /tmp/build_and_publish_docker.yml.bak .github/workflows/build_and_publish_docker.yml 2>/dev/null || true
-            cp /tmp/sync-upstream.yml.bak .github/workflows/sync-upstream.yml 2>/dev/null || true
-            cp /tmp/docker-compose.yml.bak docker-compose.yml 2>/dev/null || true
-            cp /tmp/Dockerfile.bak Dockerfile 2>/dev/null || true
-            
-            # Add our protected files back
-            git add .github/workflows/auto-version.yml .github/workflows/build_and_publish_docker.yml .github/workflows/sync-upstream.yml docker-compose.yml Dockerfile
-            git commit --amend --no-edit
-          }
+            # Use more aggressive merge strategy
+            git merge upstream/main --no-edit --strategy-option=theirs --allow-unrelated-histories || {
+              echo "Standard merge failed, using reset approach..."
+              
+              # Force merge by taking upstream completely then restoring our files
+              git reset --hard upstream/main
+              echo "Reset to upstream/main"
+            }
+          fi
+          echo "::endgroup::"
+          
+          echo "::group::Restoring protected files"
+          # Restore our protected files
+          cp /tmp/protected_files/.github/workflows/auto-version.yml .github/workflows/ 2>/dev/null || true
+          cp /tmp/protected_files/.github/workflows/build_and_publish_docker.yml .github/workflows/ 2>/dev/null || true
+          cp /tmp/protected_files/.github/workflows/sync-upstream.yml .github/workflows/ 2>/dev/null || true
+          cp /tmp/protected_files/docker-compose.yml . 2>/dev/null || true
+          cp /tmp/protected_files/Dockerfile . 2>/dev/null || true
+          
+          # Stage the restored files
+          git add .github/workflows/auto-version.yml .github/workflows/build_and_publish_docker.yml .github/workflows/sync-upstream.yml docker-compose.yml Dockerfile 2>/dev/null || true
           echo "::endgroup::"
           
           # Append Docker usage section to README if it doesn't exist
@@ -211,47 +221,76 @@ jobs:
             } >> README.md
             
             echo "Docker section appended to README.md"
-            echo "::endgroup::"
             git add README.md
-            git commit --amend --no-edit
+            echo "::endgroup::"
           else
             echo "::notice::Docker section already exists in README.md"
           fi
           
-          # Create summary of changes
-          echo "## 🔄 Upstream Sync Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Branch created:** \`$BRANCH_NAME\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Commits synced:** ${{ steps.check_updates.outputs.commits_behind }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Upstream commit:** \`${{ steps.check_updates.outputs.upstream_short }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # List changed files
-          echo "### 📝 Changed Files (sample):" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          git diff --name-only origin/main HEAD | head -20 >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          
-          # Push the branch
-          echo "::group::Pushing branch to origin"
-          git push origin $BRANCH_NAME
-          echo "::endgroup::"
+          # Check if we have any changes to commit
+          if git diff --cached --quiet && git diff --quiet; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "::warning::No changes detected after merge and file restoration"
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            
+            # Commit all changes
+            git commit -m "feat: sync with upstream
+
+            - Merged ${{ steps.check_updates.outputs.commits_behind }} commits from upstream
+            - Preserved protected files (workflows, docker configs)
+            - Updated README with Docker section
+
+            Upstream commit: ${{ steps.check_updates.outputs.upstream_short }}"
+            
+            # Create summary of changes
+            echo "## 🔄 Upstream Sync Summary" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Branch created:** \`$BRANCH_NAME\`" >> $GITHUB_STEP_SUMMARY
+            echo "**Commits synced:** ${{ steps.check_updates.outputs.commits_behind }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Upstream commit:** \`${{ steps.check_updates.outputs.upstream_short }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # List changed files
+            echo "### 📝 Changed Files:" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            git diff --name-only origin/main HEAD | head -20 >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            
+            # Push the branch
+            echo "::group::Pushing branch to origin"
+            git push origin $BRANCH_NAME
+            echo "::endgroup::"
+          fi
 
       - name: Create Pull Request
-        if: steps.check_updates.outputs.needs_update == 'true'
+        if: steps.check_updates.outputs.needs_update == 'true' && steps.create_branch.outputs.has_changes == 'true'
         id: create_pr
         env:
           GITHUB_TOKEN: ${{ secrets.PAT2 }}
         run: |
           BRANCH_NAME="${{ steps.create_branch.outputs.branch_name }}"
           
-          # Get commit messages from upstream
-          COMMITS=$(git log --oneline origin/main..upstream/main --pretty=format:"- %s" | head -20)
+          # Verify branch exists and has commits
+          if ! git show-ref --verify --quiet refs/heads/$BRANCH_NAME; then
+            echo "::error::Branch $BRANCH_NAME does not exist"
+            exit 1
+          fi
           
-          TITLE="docker: Sync with upstream"
+          # Check if branch has commits different from main
+          COMMIT_COUNT=$(git rev-list --count origin/main..HEAD)
+          if [ "$COMMIT_COUNT" -eq 0 ]; then
+            echo "::error::Branch has no commits different from main"
+            exit 1
+          fi
+          
+          # Get commit messages from the changes we made
+          COMMITS=$(git log --oneline origin/main..HEAD --pretty=format:"- %s")
+          
+          TITLE="feat: sync with upstream (${{ steps.check_updates.outputs.commits_behind }} commits)"
           BODY="## Automated sync with upstream repository
 
-          ### Upstream changes:
+          ### Changes in this sync:
           $COMMITS
 
           ### Merge strategy:
@@ -264,35 +303,64 @@ jobs:
             - Dockerfile
           - README.md is updated from upstream with Docker section appended
           - Other workflows from upstream are included (test.yml, etc.)
-          - This PR will be automatically merged
 
-          *This is an automated sync that accepts all upstream changes.*"
+          ### Upstream commits included:
+          $(git log --oneline origin/main..upstream/main --pretty=format:"- %s" | head -10)
+
+          *This is an automated sync that accepts all upstream changes while preserving our Docker enhancements.*"
           
+          # Create PR using gh CLI
           PR_URL=$(gh pr create \
             --title "$TITLE" \
             --body "$BODY" \
             --base main \
-            --head "$BRANCH_NAME")
+            --head "$BRANCH_NAME" \
+            --label "automated, upstream-sync")
           
           echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
           
           # Extract PR number
           PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          
+          echo "::notice title=PR Created::Pull Request #$PR_NUMBER created: $PR_URL"
 
       - name: Auto-merge PR
-        if: steps.check_updates.outputs.needs_update == 'true'
+        if: steps.check_updates.outputs.needs_update == 'true' && steps.create_branch.outputs.has_changes == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.PAT }}
         run: |
           PR_NUMBER="${{ steps.create_pr.outputs.pr_number }}"
           
           # Wait a bit for PR checks to initialize
-          sleep 10
+          sleep 30
           
           # Enable auto-merge (squash to keep history clean)
-          gh pr merge $PR_NUMBER --auto --squash --delete-branch || {
-            # If auto-merge fails, try direct merge
-            echo "Auto-merge failed, attempting direct merge..."
-            gh pr merge $PR_NUMBER --squash --delete-branch
-          }
+          echo "::group::Enabling auto-merge"
+          if gh pr merge $PR_NUMBER --auto --squash --delete-branch; then
+            echo "✅ Auto-merge enabled successfully"
+          else
+            echo "⚠️ Auto-merge failed, attempting direct merge..."
+            sleep 10
+            if gh pr merge $PR_NUMBER --squash --delete-branch; then
+              echo "✅ Direct merge successful"
+            else
+              echo "::error::Both auto-merge and direct merge failed"
+              # Don't fail the workflow, just report the issue
+              echo "::warning::PR created but could not be automatically merged. Manual intervention required."
+            fi
+          fi
+          echo "::endgroup::"
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.check_updates.outputs.needs_update }}" == "false" ]; then
+            echo "::notice title=No Action Needed::Repository is up-to-date with upstream"
+          elif [ "${{ steps.create_branch.outputs.has_changes }}" == "false" ]; then
+            echo "::warning title=No Changes::Upstream had updates but no actual changes after merge"
+          elif [ "${{ steps.create_pr.outputs.pr_number }}" != "" ]; then
+            echo "::notice title=Sync Complete::Successfully synced with upstream via PR #${{ steps.create_pr.outputs.pr_number }}"
+          else
+            echo "::error title=Sync Failed::Could not complete sync process"
+          fi
