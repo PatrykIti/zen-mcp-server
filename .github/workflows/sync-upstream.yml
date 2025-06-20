@@ -119,7 +119,9 @@ jobs:
           # Append Docker usage section to README if it doesn't exist
           if ! grep -q "## Docker Image Usage (Fork Enhancement)" README.md; then
             echo "::group::Appending Docker section to README"
-            cat >> README.md << 'DOCKER_SECTION'
+            
+            # Create a temporary file with the Docker section content
+            cat > /tmp/docker_section.md << 'EOF'
 
 ## Docker Image Usage (Fork Enhancement)
 
@@ -207,7 +209,12 @@ docker-compose up -d
 - `ghcr.io/patrykiti/zen-mcp-server:v5.2.4` - Specific version
 
 For more details, see the [Docker setup guide](docker-compose.yml) in this repository.
-DOCKER_SECTION
+EOF
+            
+            # Append the content to README.md
+            cat /tmp/docker_section.md >> README.md
+            rm /tmp/docker_section.md
+            
             echo "Docker section appended to README.md"
             echo "::endgroup::"
             git add README.md
