@@ -35,6 +35,13 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Extract version from config.py
+      id: extract_version
+      run: |
+        VERSION=$(grep -E "^__version__\s*=\s*" config.py | cut -d'"' -f2)
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Extracted version: $VERSION"
+
     - name: Extract metadata (tags, labels) for Docker
       id: meta
       uses: docker/metadata-action@v5
@@ -43,7 +50,7 @@ jobs:
         tags: |
           type=ref,event=tag
           type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
-          type=sha,prefix=main-,enable=${{ github.event_name == 'repository_dispatch' }}
+          type=raw,value=${{ steps.extract_version.outputs.version }},enable=${{ github.event_name == 'repository_dispatch' }}
           type=raw,value=pr-${{ github.event.client_payload.pr_number }},enable=${{ github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number != '' }}
 
     - name: Build and push Docker image
