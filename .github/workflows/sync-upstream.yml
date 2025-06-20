@@ -160,6 +160,17 @@ jobs:
                     "-e", "CUSTOM_API_KEY=",
                     "-e", "CUSTOM_MODEL_NAME=llama3.2",
                     "-e", "DEFAULT_MODEL=auto",
+                    "-e", "OPENAI_ALLOWED_MODELS=o3-mini,o4-mini",
+                    "-e", "GOOGLE_ALLOWED_MODELS=flash,pro",
+                    "-e", "XAI_ALLOWED_MODELS=grok,grok-3-fast",
+                    "-e", "OPENROUTER_ALLOWED_MODELS=opus,sonnet,mistral",
+                    "-e", "OPENROUTER_REFERER=https://your-app.com",
+                    "-e", "OPENROUTER_TITLE=Your App Name",
+                    "-e", "CUSTOM_MODELS_CONFIG_PATH=/path/to/custom_models.json",
+                    "-e", "DEFAULT_THINKING_MODE_THINKDEEP=high",
+                    "-e", "CONVERSATION_TIMEOUT_HOURS=5",
+                    "-e", "MAX_CONVERSATION_TURNS=20",
+                    "-e", "LOG_LEVEL=INFO",
                     "-v", "<path_to_your_workspace>:<path_to_your_workspace>",
                     "ghcr.io/patrykiti/zen-mcp-server:latest"
                   ]
