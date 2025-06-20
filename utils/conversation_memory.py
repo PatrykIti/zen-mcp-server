@@ -81,6 +81,34 @@ CONVERSATION TURN PRIORITIZATION (Newest-First Collection, Chronological Present
 This dual approach ensures optimal context preservation (newest-first) with natural
 conversation flow (chronological) for maximum LLM comprehension and relevance.
 
+DUAL PRIORITIZATION STRATEGY (Files & Conversations):
+The conversation memory system implements sophisticated prioritization for both files and
+conversation turns, using a consistent "newest-first" approach during collection but
+presenting information in the optimal format for LLM consumption:
+
+FILE PRIORITIZATION (Newest-First Throughout):
+1. When collecting files across conversation turns, the system walks BACKWARDS through
+   turns (newest to oldest) and builds a unique file list
+2. If the same file path appears in multiple turns, only the reference from the
+   NEWEST turn is kept in the final list
+3. This "newest-first" ordering is preserved throughout the entire pipeline:
+   - get_conversation_file_list() establishes the order
+   - build_conversation_history() maintains it during token budgeting
+   - When token limits are hit, OLDER files are excluded first
+4. This strategy works across conversation chains - files from newer turns in ANY
+   thread take precedence over files from older turns in ANY thread
+
+CONVERSATION TURN PRIORITIZATION (Newest-First Collection, Chronological Presentation):
+1. COLLECTION PHASE: Processes turns newest-to-oldest to prioritize recent context
+   - When token budget is tight, OLDER turns are excluded first
+   - Ensures most contextually relevant recent exchanges are preserved
+2. PRESENTATION PHASE: Reverses collected turns to chronological order (oldest-first)
+   - LLM sees natural conversation flow: "Turn 1 → Turn 2 → Turn 3..."
+   - Maintains proper sequential understanding while preserving recency prioritization
+
+This dual approach ensures optimal context preservation (newest-first) with natural
+conversation flow (chronological) for maximum LLM comprehension and relevance.
+
 USAGE EXAMPLE:
 1. Tool A creates thread: create_thread("analyze", request_data) → returns UUID
 2. Tool A adds response: add_turn(UUID, "assistant", response, files=[...], tool_name="analyze")
@@ -317,7 +345,8 @@ def add_turn(
 
     Appends a new conversation turn to an existing thread. This is the core
     function for building conversation history and enabling cross-tool
-    continuation. Each turn preserves the tool and model that generated it.
+    continuation. Each turn preserves the tool and model that generated it,
+    and tracks file reception order using atomic Redis counters.
 
     Args:
         thread_id: UUID of the conversation thread

@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  zen-mcp:
+    build: .
+    image: ghcr.io/patrykiti/zen-mcp-server:latest
+    container_name: zen-mcp-server
+    restart: unless-stopped
+    stop_grace_period: 5s
+    environment:
+      # API Keys
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - XAI_API_KEY=${XAI_API_KEY:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      
+      # Custom API endpoint support (for Ollama, vLLM, etc.)
+      - CUSTOM_API_URL=${CUSTOM_API_URL:-}
+      - CUSTOM_API_KEY=${CUSTOM_API_KEY:-}
+      - CUSTOM_MODEL_NAME=${CUSTOM_MODEL_NAME:-llama3.2}
+      
+      # Model configuration
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-auto}
+      - DEFAULT_THINKING_MODE_THINKDEEP=${DEFAULT_THINKING_MODE_THINKDEEP:-high}
+      - DEFAULT_CONSENSUS_TIMEOUT=${DEFAULT_CONSENSUS_TIMEOUT:-120.0}
+      
+      # Conversation settings (now in-memory, no Redis)
+      - CONVERSATION_TIMEOUT_HOURS=${CONVERSATION_TIMEOUT_HOURS:-3}
+      - MAX_CONVERSATION_TURNS=${MAX_CONVERSATION_TURNS:-20}
+      
+      # Model usage restrictions
+      - OPENAI_ALLOWED_MODELS=${OPENAI_ALLOWED_MODELS:-}
+      - GOOGLE_ALLOWED_MODELS=${GOOGLE_ALLOWED_MODELS:-}
+      - XAI_ALLOWED_MODELS=${XAI_ALLOWED_MODELS:-}
+      
+      # Workspace configuration
+      - WORKSPACE_ROOT=${WORKSPACE_ROOT:-${HOME}}
+      - USER_HOME=${HOME}
+      
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # Mount workspace for file access
+      - ${WORKSPACE_ROOT:-${HOME}}:${WORKSPACE_ROOT:-${HOME}}:ro
+      # Mount logs directory
+      - ./logs:/app/logs
+    stdin_open: true
+    tty: true
+    command: ["python", "server.py"]
+
+volumes:
+  logs:

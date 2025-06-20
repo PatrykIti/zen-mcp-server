@@ -11,7 +11,12 @@
       "Bash(cat:*)",
       "Bash(grep:*)",
       "Bash(source:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(gh repo view:*)",
+      "Bash(ls:*)",
+      "Bash(git push:*)",
+      "Bash(git checkout:*)",
+      "Bash(curl:*)"
     ],
     "deny": []
   }

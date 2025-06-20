@@ -11,6 +11,9 @@ from pydantic import Field, field_validator
 if TYPE_CHECKING:
     from tools.models import ToolModelCategory
 
+if TYPE_CHECKING:
+    from tools.models import ToolModelCategory
+
 from config import TEMPERATURE_ANALYTICAL
 from systemprompts import DEBUG_ISSUE_PROMPT
 

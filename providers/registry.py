@@ -402,6 +402,52 @@ class ModelProviderRegistry:
         return None
 
     @classmethod
+    def _find_extended_thinking_model(cls) -> Optional[str]:
+        """Find a model suitable for extended reasoning from custom/openrouter providers.
+
+        Returns:
+            Model name if found, None otherwise
+        """
+        # Check custom provider first
+        custom_provider = cls.get_provider(ProviderType.CUSTOM)
+        if custom_provider:
+            # Check if it's a CustomModelProvider and has thinking models
+            try:
+                from providers.custom import CustomProvider
+
+                if isinstance(custom_provider, CustomProvider) and hasattr(custom_provider, "model_registry"):
+                    for model_name, config in custom_provider.model_registry.items():
+                        if config.get("supports_extended_thinking", False):
+                            return model_name
+            except ImportError:
+                pass
+
+        # Then check OpenRouter for high-context/powerful models
+        openrouter_provider = cls.get_provider(ProviderType.OPENROUTER)
+        if openrouter_provider:
+            # Prefer models known for deep reasoning
+            preferred_models = [
+                "anthropic/claude-3.5-sonnet",
+                "anthropic/claude-3-opus-20240229",
+                "google/gemini-2.5-pro-preview-06-05",
+                "google/gemini-pro-1.5",
+                "meta-llama/llama-3.1-70b-instruct",
+                "mistralai/mixtral-8x7b-instruct",
+            ]
+            for model in preferred_models:
+                try:
+                    if openrouter_provider.validate_model_name(model):
+                        return model
+                except Exception as e:
+                    # Log the error for debugging purposes but continue searching
+                    import logging
+
+                    logging.warning(f"Model validation for '{model}' on OpenRouter failed: {e}")
+                    continue
+
+        return None
+
+    @classmethod
     def get_available_providers_with_keys(cls) -> list[ProviderType]:
         """Get list of provider types that have valid API keys.
 

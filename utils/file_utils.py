@@ -40,8 +40,9 @@ multi-turn file handling:
 import json
 import logging
 import os
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from .file_types import BINARY_EXTENSIONS, CODE_EXTENSIONS, IMAGE_EXTENSIONS, TEXT_EXTENSIONS
 from .security_config import EXCLUDED_DIRS, is_dangerous_path
@@ -363,6 +364,18 @@ def expand_paths(paths: list[str], extensions: Optional[set[str]] = None) -> lis
                 continue
 
             # Check 2: Skip if this is the MCP's own directory
+            if is_mcp_directory(path_obj):
+                logger.info(
+                    f"Skipping MCP server directory: {path}. The MCP server code is excluded from project scans."
+                )
+                continue
+
+            # Check 2: Prevent scanning user's home directory root
+            if is_home_directory_root(path_obj):
+                logger.warning(f"Skipping home directory root: {path}. Please specify a project subdirectory instead.")
+                continue
+
+            # Check 3: Skip if this is the MCP's own directory
             if is_mcp_directory(path_obj):
                 logger.info(
                     f"Skipping MCP server directory: {path}. The MCP server code is excluded from project scans."
