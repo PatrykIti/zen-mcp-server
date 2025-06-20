@@ -1,0 +1,136 @@
+name: Sync with Upstream
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # Every hour
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/BeehiveInnovations/gemini-mcp-server.git || true
+          git fetch upstream
+
+      - name: Check for updates
+        id: check_updates
+        run: |
+          # Get latest commit from upstream
+          UPSTREAM_SHA=$(git rev-parse upstream/main)
+          # Get latest commit from our main
+          OUR_SHA=$(git rev-parse origin/main)
+          
+          echo "upstream_sha=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
+          echo "our_sha=$OUR_SHA" >> $GITHUB_OUTPUT
+          
+          if [ "$UPSTREAM_SHA" = "$OUR_SHA" ]; then
+            echo "No updates needed"
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+          else
+            echo "Updates available"
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create sync branch and merge
+        if: steps.check_updates.outputs.needs_update == 'true'
+        id: create_branch
+        run: |
+          # Generate unique branch name
+          BRANCH_NAME="sync/upstream-$(date +%Y%m%d-%H%M%S)"
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          
+          # Create and checkout new branch from main
+          git checkout -b $BRANCH_NAME origin/main
+          
+          # Merge upstream changes with strategy to always accept theirs
+          git merge upstream/main --no-edit --strategy-option=theirs || {
+            # If merge still fails, use more aggressive approach
+            echo "Standard merge failed, using reset approach..."
+            
+            # Get list of our workflow files to preserve
+            git checkout origin/main -- .github/workflows/
+            
+            # Force merge with theirs strategy
+            git merge upstream/main --no-edit --strategy=ours --allow-unrelated-histories
+            
+            # Now checkout all files from upstream except workflows
+            git checkout upstream/main -- . ':!.github/workflows/'
+            
+            # Re-add our workflows on top
+            git add .github/workflows/
+            git commit --amend --no-edit
+          }
+          
+          # Push the branch
+          git push origin $BRANCH_NAME
+
+      - name: Create Pull Request
+        if: steps.check_updates.outputs.needs_update == 'true'
+        id: create_pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH_NAME="${{ steps.create_branch.outputs.branch_name }}"
+          
+          # Get commit messages from upstream
+          COMMITS=$(git log --oneline origin/main..upstream/main --pretty=format:"- %s" | head -20)
+          
+          TITLE="docker: Sync with upstream"
+          BODY="## Automated sync with upstream repository
+
+          ### Upstream changes:
+          $COMMITS
+
+          ### Merge strategy:
+          - All changes from upstream are automatically accepted
+          - Our workflows in \`.github/workflows/\` are preserved
+          - This PR will be automatically merged
+
+          *This is an automated sync that accepts all upstream changes.*"
+          
+          PR_URL=$(gh pr create \
+            --title "$TITLE" \
+            --body "$BODY" \
+            --base main \
+            --head "$BRANCH_NAME" \
+            --label "automated,upstream-sync")
+          
+          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
+          
+          # Extract PR number
+          PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+
+      - name: Auto-merge PR
+        if: steps.check_updates.outputs.needs_update == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER="${{ steps.create_pr.outputs.pr_number }}"
+          
+          # Wait a bit for PR checks to initialize
+          sleep 10
+          
+          # Enable auto-merge (squash to keep history clean)
+          gh pr merge $PR_NUMBER --auto --squash --delete-branch || {
+            # If auto-merge fails, try direct merge
+            echo "Auto-merge failed, attempting direct merge..."
+            gh pr merge $PR_NUMBER --squash --delete-branch
+          }
