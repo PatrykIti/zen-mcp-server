@@ -345,7 +345,7 @@ jobs:
       - name: Auto-merge PR
         if: steps.check_updates.outputs.needs_update == 'true' && steps.create_pr.outputs.pr_number != ''
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT }}
+          GITHUB_TOKEN: ${{ secrets.PAT2 }}
         run: |
           PR_NUMBER="${{ steps.create_pr.outputs.pr_number }}"
           
