@@ -159,7 +159,7 @@ The final implementation resulted in a 26% improvement in JSON parsing performan
       "args": [
         "run", "--rm", "-i",
         "-e", "GEMINI_API_KEY",
-        "ghcr.io/beehiveinnovations/zen-mcp-server:v4.8.0"
+        "ghcr.io/patrykiti/zen-mcp-server:v4.8.0"
       ],
       "env": {
         "GEMINI_API_KEY": "<your_api_key_from_google_ai_studio>"
@@ -187,7 +187,7 @@ The final implementation resulted in a 26% improvement in JSON parsing performan
         "-e", "DEFAULT_MODEL",
         "-e", "WORKSPACE_ROOT",
         "-v", "${HOME}:${HOME}",
-        "ghcr.io/beehiveinnovations/zen-mcp-server:latest"
+        "ghcr.io/patrykiti/zen-mcp-server:latest"
       ],
       "env": {
         "GEMINI_API_KEY": "<your_gemini_api_key>",

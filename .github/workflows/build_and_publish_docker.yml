@@ -8,7 +8,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: beehiveinnovations/zen-mcp-server
+  IMAGE_NAME: patrykiti/zen-mcp-server
 
 jobs:
   build-and-push:
