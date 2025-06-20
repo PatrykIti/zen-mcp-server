@@ -120,100 +120,96 @@ jobs:
           if ! grep -q "## Docker Image Usage (Fork Enhancement)" README.md; then
             echo "::group::Appending Docker section to README"
             
-            # Create a temporary file with the Docker section content
-            cat > /tmp/docker_section.md << 'EOF'
-
-## Docker Image Usage (Fork Enhancement)
-
-This fork maintains Docker support with pre-built images available at GitHub Container Registry.
-
-### Quick Start with Docker
-
-**Basic Configuration (Gemini only):**
-```json
-{
-  "mcpServers": {
-    "zen": {
-      "command": "docker",
-      "args": [
-        "run", "--rm", "-i",
-        "-e", "GEMINI_API_KEY=<your_api_key_from_google_ai_studio>",
-        "-v", "<path_to_your_workspace>:<path_to_your_workspace>",
-        "ghcr.io/patrykiti/zen-mcp-server:latest"
-      ]
-    }
-  }
-}
-```
-
-**Full Configuration (All Providers):**
-```json
-{
-  "mcpServers": {
-    "zen": {
-      "command": "docker",
-      "args": [
-        "run", "--rm", "-i",
-        "-e", "GEMINI_API_KEY=<your-gemini-key>",
-        "-e", "OPENAI_API_KEY=<your-openai-key>",
-        "-e", "XAI_API_KEY=<your-xai-key>",
-        "-e", "OPENROUTER_API_KEY=<your-openrouter-key>",
-        "-e", "CUSTOM_API_URL=http://host.docker.internal:11434/v1",
-        "-e", "CUSTOM_API_KEY=",
-        "-e", "CUSTOM_MODEL_NAME=llama3.2",
-        "-e", "DEFAULT_MODEL=auto",
-        "-e", "OPENAI_ALLOWED_MODELS=o3-mini,o4-mini",
-        "-e", "GOOGLE_ALLOWED_MODELS=flash,pro",
-        "-e", "XAI_ALLOWED_MODELS=grok,grok-3-fast",
-        "-e", "OPENROUTER_ALLOWED_MODELS=opus,sonnet,mistral",
-        "-e", "OPENROUTER_REFERER=https://your-app.com",
-        "-e", "OPENROUTER_TITLE=Your App Name",
-        "-e", "CUSTOM_MODELS_CONFIG_PATH=/path/to/custom_models.json",
-        "-e", "DEFAULT_THINKING_MODE_THINKDEEP=high",
-        "-e", "CONVERSATION_TIMEOUT_HOURS=5",
-        "-e", "MAX_CONVERSATION_TURNS=20",
-        "-e", "LOG_LEVEL=INFO",
-        "-v", "<path_to_your_workspace>:<path_to_your_workspace>",
-        "ghcr.io/patrykiti/zen-mcp-server:latest"
-      ]
-    }
-  }
-}
-```
-
-**Note:** Replace `<path_to_your_workspace>` with the directory where your projects are located.
-This is the directory that MCP server will have access to. Examples:
-- macOS: `/Users/your_username/Documents` or `/Users/your_username/Projects`
-- Linux: `/home/your_username/projects` or `/home/your_username/workspace`
-- Windows: `C:/Users/your_username/Documents` or `C:/Projects`
-
-⚠️ **Important:** The path must be the same on both sides of the colon!
-
-### Using Docker Compose
-
-```bash
-# Clone the repository
-git clone https://github.com/PatrykIti/zen-mcp-server.git
-cd zen-mcp-server
-
-# Create .env file with your API keys
-cp .env.example .env
-nano .env
-
-# Start the server
-docker-compose up -d
-```
-
-### Available Tags
-- `ghcr.io/patrykiti/zen-mcp-server:latest` - Always the newest version
-- `ghcr.io/patrykiti/zen-mcp-server:v5.2.4` - Specific version
-
-For more details, see the [Docker setup guide](docker-compose.yml) in this repository.
-EOF
-            
-            # Append the content to README.md
-            cat /tmp/docker_section.md >> README.md
-            rm /tmp/docker_section.md
+            # Create Docker section using echo commands
+            {
+              echo ""
+              echo "## Docker Image Usage (Fork Enhancement)"
+              echo ""
+              echo "This fork maintains Docker support with pre-built images available at GitHub Container Registry."
+              echo ""
+              echo "### Quick Start with Docker"
+              echo ""
+              echo "**Basic Configuration (Gemini only):**"
+              echo '```json'
+              echo '{'
+              echo '  "mcpServers": {'
+              echo '    "zen": {'
+              echo '      "command": "docker",'
+              echo '      "args": ['
+              echo '        "run", "--rm", "-i",'
+              echo '        "-e", "GEMINI_API_KEY=<your_api_key_from_google_ai_studio>",'
+              echo '        "-v", "<path_to_your_workspace>:<path_to_your_workspace>",'
+              echo '        "ghcr.io/patrykiti/zen-mcp-server:latest"'
+              echo '      ]'
+              echo '    }'
+              echo '  }'
+              echo '}'
+              echo '```'
+              echo ""
+              echo "**Full Configuration (All Providers):**"
+              echo '```json'
+              echo '{'
+              echo '  "mcpServers": {'
+              echo '    "zen": {'
+              echo '      "command": "docker",'
+              echo '      "args": ['
+              echo '        "run", "--rm", "-i",'
+              echo '        "-e", "GEMINI_API_KEY=<your-gemini-key>",'
+              echo '        "-e", "OPENAI_API_KEY=<your-openai-key>",'
+              echo '        "-e", "XAI_API_KEY=<your-xai-key>",'
+              echo '        "-e", "OPENROUTER_API_KEY=<your-openrouter-key>",'
+              echo '        "-e", "CUSTOM_API_URL=http://host.docker.internal:11434/v1",'
+              echo '        "-e", "CUSTOM_API_KEY=",'
+              echo '        "-e", "CUSTOM_MODEL_NAME=llama3.2",'
+              echo '        "-e", "DEFAULT_MODEL=auto",'
+              echo '        "-e", "OPENAI_ALLOWED_MODELS=o3-mini,o4-mini",'
+              echo '        "-e", "GOOGLE_ALLOWED_MODELS=flash,pro",'
+              echo '        "-e", "XAI_ALLOWED_MODELS=grok,grok-3-fast",'
+              echo '        "-e", "OPENROUTER_ALLOWED_MODELS=opus,sonnet,mistral",'
+              echo '        "-e", "OPENROUTER_REFERER=https://your-app.com",'
+              echo '        "-e", "OPENROUTER_TITLE=Your App Name",'
+              echo '        "-e", "CUSTOM_MODELS_CONFIG_PATH=/path/to/custom_models.json",'
+              echo '        "-e", "DEFAULT_THINKING_MODE_THINKDEEP=high",'
+              echo '        "-e", "CONVERSATION_TIMEOUT_HOURS=5",'
+              echo '        "-e", "MAX_CONVERSATION_TURNS=20",'
+              echo '        "-e", "LOG_LEVEL=INFO",'
+              echo '        "-v", "<path_to_your_workspace>:<path_to_your_workspace>",'
+              echo '        "ghcr.io/patrykiti/zen-mcp-server:latest"'
+              echo '      ]'
+              echo '    }'
+              echo '  }'
+              echo '}'
+              echo '```'
+              echo ""
+              echo "**Note:** Replace \`<path_to_your_workspace>\` with the directory where your projects are located."
+              echo "This is the directory that MCP server will have access to. Examples:"
+              echo "- macOS: \`/Users/your_username/Documents\` or \`/Users/your_username/Projects\`"
+              echo "- Linux: \`/home/your_username/projects\` or \`/home/your_username/workspace\`"
+              echo "- Windows: \`C:/Users/your_username/Documents\` or \`C:/Projects\`"
+              echo ""
+              echo "⚠️ **Important:** The path must be the same on both sides of the colon!"
+              echo ""
+              echo "### Using Docker Compose"
+              echo ""
+              echo '```bash'
+              echo "# Clone the repository"
+              echo "git clone https://github.com/PatrykIti/zen-mcp-server.git"
+              echo "cd zen-mcp-server"
+              echo ""
+              echo "# Create .env file with your API keys"
+              echo "cp .env.example .env"
+              echo "nano .env"
+              echo ""
+              echo "# Start the server"
+              echo "docker-compose up -d"
+              echo '```'
+              echo ""
+              echo "### Available Tags"
+              echo "- \`ghcr.io/patrykiti/zen-mcp-server:latest\` - Always the newest version"
+              echo "- \`ghcr.io/patrykiti/zen-mcp-server:v5.2.4\` - Specific version"
+              echo ""
+              echo "For more details, see the [Docker setup guide](docker-compose.yml) in this repository."
+            } >> README.md
             
             echo "Docker section appended to README.md"
             echo "::endgroup::"
