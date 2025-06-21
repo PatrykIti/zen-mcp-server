@@ -56,27 +56,27 @@ jobs:
           echo "our_sha=$OUR_SHA" >> $GITHUB_OUTPUT
           echo "our_short=$OUR_SHORT" >> $GITHUB_OUTPUT
           
-          # Check divergence
-          COMMITS_BEHIND=$(git rev-list --count HEAD..upstream/main)
-          COMMITS_AHEAD=$(git rev-list --count upstream/main..HEAD)
-          
-          echo "commits_behind=$COMMITS_BEHIND" >> $GITHUB_OUTPUT
-          echo "commits_ahead=$COMMITS_AHEAD" >> $GITHUB_OUTPUT
-          
-          echo "::notice::Repository is $COMMITS_AHEAD commits ahead and $COMMITS_BEHIND commits behind upstream"
-          
-          if [ "$COMMITS_BEHIND" -eq 0 ]; then
+          # Check if upstream is ancestor of our main (meaning we're up to date)
+          if git merge-base --is-ancestor upstream/main HEAD; then
             echo "needs_update=false" >> $GITHUB_OUTPUT
             
             echo "## ✅ Repository is up-to-date with upstream" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Current commit:** \`$OUR_SHORT\`" >> $GITHUB_STEP_SUMMARY
             echo "**Upstream commit:** \`$UPSTREAM_SHORT\`" >> $GITHUB_STEP_SUMMARY
-            echo "**Commits ahead:** $COMMITS_AHEAD" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "No synchronization needed. The fork is already synchronized with the upstream repository." >> $GITHUB_STEP_SUMMARY
           else
             echo "needs_update=true" >> $GITHUB_OUTPUT
+            
+            # Count commits behind/ahead
+            COMMITS_BEHIND=$(git rev-list --count HEAD..upstream/main)
+            COMMITS_AHEAD=$(git rev-list --count upstream/main..HEAD)
+            
+            echo "commits_behind=$COMMITS_BEHIND" >> $GITHUB_OUTPUT
+            echo "commits_ahead=$COMMITS_AHEAD" >> $GITHUB_OUTPUT
+            
+            echo "::notice::Repository is $COMMITS_AHEAD commits ahead and $COMMITS_BEHIND commits behind upstream"
             
             echo "::group::Commits to sync from upstream"
             git log --oneline HEAD..upstream/main | head -10
@@ -102,94 +102,111 @@ jobs:
           echo "Starting point: $(git rev-parse --short HEAD)"
           echo "::endgroup::"
 
-      - name: Cherry-pick upstream changes
+      - name: Backup protected files
         if: steps.check_updates.outputs.needs_update == 'true'
-        id: cherry_pick
+        run: |
+          echo "::group::Backing up protected files"
+          mkdir -p /tmp/protected_files
+          
+          # List of protected files
+          PROTECTED_FILES=(
+            ".github/workflows/auto-version.yml"
+            ".github/workflows/build_and_publish_docker.yml"
+            ".github/workflows/sync-upstream.yml"
+            "docker-compose.yml"
+            "Dockerfile"
+          )
+          
+          for file in "${PROTECTED_FILES[@]}"; do
+            if [ -f "$file" ]; then
+              echo "Backing up $file"
+              mkdir -p "/tmp/protected_files/$(dirname "$file")"
+              cp "$file" "/tmp/protected_files/$file"
+            fi
+          done
+          echo "::endgroup::"
+
+      - name: Merge upstream changes
+        if: steps.check_updates.outputs.needs_update == 'true'
+        id: merge_upstream
         run: |
           BRANCH_NAME="${{ steps.create_branch.outputs.branch_name }}"
           
-          echo "::group::Cherry-picking upstream commits"
-          # Get list of commits to cherry-pick (in reverse order for correct application)
-          COMMITS_TO_PICK=$(git rev-list --reverse HEAD..upstream/main)
+          echo "::group::Merging upstream changes"
           
-          if [ -z "$COMMITS_TO_PICK" ]; then
-            echo "No commits to cherry-pick"
-            echo "success=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          # Save protected files
-          echo "Backing up protected files..."
-          mkdir -p /tmp/protected_files
-          cp .github/workflows/auto-version.yml /tmp/protected_files/ 2>/dev/null || true
-          cp .github/workflows/build_and_publish_docker.yml /tmp/protected_files/ 2>/dev/null || true
-          cp .github/workflows/sync-upstream.yml /tmp/protected_files/ 2>/dev/null || true
-          cp docker-compose.yml /tmp/protected_files/ 2>/dev/null || true
-          cp Dockerfile /tmp/protected_files/ 2>/dev/null || true
-          
-          # Cherry-pick each commit
-          PICKED_COUNT=0
-          for commit in $COMMITS_TO_PICK; do
-            echo "Cherry-picking $commit..."
-            if git cherry-pick $commit --strategy-option=theirs; then
-              PICKED_COUNT=$((PICKED_COUNT + 1))
-            else
-              echo "Cherry-pick failed for $commit, trying to resolve..."
-              
-              # Accept theirs for all conflicts except protected files
-              git status --porcelain | grep "^UU" | awk '{print $2}' | while read file; do
-                case "$file" in
-                  .github/workflows/auto-version.yml|\
-                  .github/workflows/build_and_publish_docker.yml|\
-                  .github/workflows/sync-upstream.yml|\
-                  docker-compose.yml|\
-                  Dockerfile)
-                    echo "Keeping our version of $file"
-                    git checkout --ours "$file"
-                    ;;
-                  *)
-                    echo "Accepting upstream version of $file"
-                    git checkout --theirs "$file"
-                    ;;
-                esac
-                git add "$file"
-              done
-              
-              # Continue cherry-pick
-              git cherry-pick --continue --no-edit || {
-                echo "Failed to resolve cherry-pick for $commit"
-                git cherry-pick --abort
-                break
-              }
-              PICKED_COUNT=$((PICKED_COUNT + 1))
-            fi
-          done
-          
-          echo "Cherry-picked $PICKED_COUNT commits"
-          echo "picked_count=$PICKED_COUNT" >> $GITHUB_OUTPUT
-          
-          if [ "$PICKED_COUNT" -gt 0 ]; then
+          # Try to merge upstream/main
+          if git merge upstream/main --no-edit; then
+            echo "Merge successful without conflicts"
             echo "success=true" >> $GITHUB_OUTPUT
-            
-            # Restore protected files if they were changed
-            cp /tmp/protected_files/auto-version.yml .github/workflows/ 2>/dev/null || true
-            cp /tmp/protected_files/build_and_publish_docker.yml .github/workflows/ 2>/dev/null || true
-            cp /tmp/protected_files/sync-upstream.yml .github/workflows/ 2>/dev/null || true
-            cp /tmp/protected_files/docker-compose.yml . 2>/dev/null || true
-            cp /tmp/protected_files/Dockerfile . 2>/dev/null || true
-            
-            # Commit if there are changes to protected files
-            if ! git diff --quiet; then
-              git add -A
-              git commit -m "Restore protected Docker files after upstream sync"
-            fi
           else
-            echo "success=false" >> $GITHUB_OUTPUT
+            echo "Merge conflicts detected, resolving..."
+            
+            # List conflicts
+            echo "Conflicted files:"
+            git status --porcelain | grep "^UU" | awk '{print $2}'
+            
+            # Resolve conflicts: keep theirs for most files, ours for protected files
+            git status --porcelain | grep "^UU" | awk '{print $2}' | while read file; do
+              case "$file" in
+                .github/workflows/auto-version.yml|\
+                .github/workflows/build_and_publish_docker.yml|\
+                .github/workflows/sync-upstream.yml|\
+                docker-compose.yml|\
+                Dockerfile)
+                  echo "Keeping our version of $file"
+                  git checkout --ours "$file"
+                  ;;
+                *)
+                  echo "Accepting upstream version of $file"
+                  git checkout --theirs "$file"
+                  ;;
+              esac
+              git add "$file"
+            done
+            
+            # Complete the merge
+            git commit --no-edit
+            echo "Merge completed with conflict resolution"
+            echo "success=true" >> $GITHUB_OUTPUT
           fi
           echo "::endgroup::"
 
+      - name: Restore protected files
+        if: steps.check_updates.outputs.needs_update == 'true' && steps.merge_upstream.outputs.success == 'true'
+        run: |
+          echo "::group::Restoring protected files"
+          
+          PROTECTED_FILES=(
+            ".github/workflows/auto-version.yml"
+            ".github/workflows/build_and_publish_docker.yml"
+            ".github/workflows/sync-upstream.yml"
+            "docker-compose.yml"
+            "Dockerfile"
+          )
+          
+          CHANGES_MADE=false
+          
+          for file in "${PROTECTED_FILES[@]}"; do
+            if [ -f "/tmp/protected_files/$file" ]; then
+              if ! cmp -s "/tmp/protected_files/$file" "$file" 2>/dev/null; then
+                echo "Restoring protected file: $file"
+                mkdir -p "$(dirname "$file")"
+                cp "/tmp/protected_files/$file" "$file"
+                git add "$file"
+                CHANGES_MADE=true
+              fi
+            fi
+          done
+          
+          # Commit restored files if any changes were made
+          if [ "$CHANGES_MADE" = true ]; then
+            git commit -m "Restore protected Docker files after upstream merge"
+          fi
+          
+          echo "::endgroup::"
+
       - name: Update README with Docker section
-        if: steps.check_updates.outputs.needs_update == 'true' && steps.cherry_pick.outputs.success == 'true'
+        if: steps.check_updates.outputs.needs_update == 'true' && steps.merge_upstream.outputs.success == 'true'
         run: |
           if ! grep -q "## Docker Image Usage (Fork Enhancement)" README.md; then
             echo "::group::Adding Docker section to README"
@@ -278,7 +295,7 @@ jobs:
           fi
 
       - name: Push branch and create PR
-        if: steps.check_updates.outputs.needs_update == 'true' && steps.cherry_pick.outputs.success == 'true'
+        if: steps.check_updates.outputs.needs_update == 'true' && steps.merge_upstream.outputs.success == 'true'
         id: create_pr
         env:
           GITHUB_TOKEN: ${{ secrets.PAT2 }}
@@ -299,18 +316,14 @@ jobs:
           # Create PR
           echo "::group::Creating Pull Request"
           
-          # Get the new commits
-          COMMITS=$(git log --oneline main..HEAD --pretty=format:"- %s")
+          # Get the merge commit message
+          MERGE_COMMIT=$(git log -1 --pretty=format:"%s")
           
-          TITLE="docker: Sync with upstream (cherry-pick)"
+          TITLE="docker: Sync with upstream (merge)"
           BODY="## Automated sync with upstream repository
 
-          ### Cherry-picked commits from upstream:
-          $COMMITS
-
-          ### Sync details:
-          - Repository was ${{ steps.check_updates.outputs.commits_ahead }} commits ahead and ${{ steps.check_updates.outputs.commits_behind }} commits behind upstream
-          - Cherry-picked ${{ steps.cherry_pick.outputs.picked_count }} commits from upstream
+          ### Merge details:
+          - Merged upstream/main into our fork
           - Protected Docker-related files were preserved
           - README.md updated with Docker section if needed
 
@@ -324,7 +337,9 @@ jobs:
           **Upstream commit:** \`${{ steps.check_updates.outputs.upstream_short }}\`
           **Our base commit:** \`${{ steps.check_updates.outputs.our_short }}\`
 
-          *This PR uses cherry-pick to apply only the new upstream commits while preserving our custom changes.*"
+          **Merge commit:** $MERGE_COMMIT
+
+          *This PR uses git merge to properly maintain fork relationship with upstream while preserving our custom changes.*"
           
           PR_URL=$(gh pr create \
             --title "$TITLE" \
@@ -350,12 +365,42 @@ jobs:
           PR_NUMBER="${{ steps.create_pr.outputs.pr_number }}"
           
           echo "Waiting for PR checks to initialize..."
-          sleep 10
+          sleep 15
           
-          # Enable auto-merge
-          echo "Enabling auto-merge for PR #$PR_NUMBER"
-          gh pr merge $PR_NUMBER --auto --squash --delete-branch || {
-            echo "Auto-merge failed, attempting direct merge..."
-            sleep 5
-            gh pr merge $PR_NUMBER --squash --delete-branch
-          }
+          # Check if PR exists first
+          echo "Verifying PR #$PR_NUMBER exists..."
+          if ! gh pr view $PR_NUMBER --repo ${{ github.repository }} >/dev/null 2>&1; then
+            echo "Error: PR #$PR_NUMBER does not exist or cannot be accessed"
+            echo "Available PRs:"
+            gh pr list --repo ${{ github.repository }} --state open
+            exit 1
+          fi
+          
+          # Check PR status
+          PR_STATE=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} --json state --jq '.state')
+          echo "PR #$PR_NUMBER state: $PR_STATE"
+          
+          if [ "$PR_STATE" = "OPEN" ]; then
+            # Enable auto-merge
+            echo "Enabling auto-merge for PR #$PR_NUMBER"
+            if gh pr merge $PR_NUMBER --auto --squash --delete-branch --repo ${{ github.repository }}; then
+              echo "Auto-merge enabled successfully"
+            else
+              echo "Auto-merge failed, attempting direct merge..."
+              sleep 5
+              
+              # Check if there are any status checks blocking the merge
+              echo "Checking merge requirements..."
+              gh pr view $PR_NUMBER --repo ${{ github.repository }} --json mergeable,mergeStateStatus
+              
+              # Try direct merge
+              if gh pr merge $PR_NUMBER --squash --delete-branch --repo ${{ github.repository }}; then
+                echo "Direct merge successful"
+              else
+                echo "Direct merge also failed. PR may have conflicts or protection rules."
+                echo "PR will remain open for manual review."
+              fi
+            fi
+          else
+            echo "PR is not in OPEN state (current: $PR_STATE). Skipping merge."
+          fi
