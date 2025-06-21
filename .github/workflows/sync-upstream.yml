@@ -56,9 +56,12 @@ jobs:
           echo "our_sha=$OUR_SHA" >> $GITHUB_OUTPUT
           echo "our_short=$OUR_SHORT" >> $GITHUB_OUTPUT
           
-          # Check if upstream is ancestor of our main (meaning we're up to date)
-          if git merge-base --is-ancestor upstream/main HEAD; then
+          # Check if we can fast-forward to upstream
+          MERGE_BASE=$(git merge-base HEAD upstream/main)
+          
+          if [ "$OUR_SHA" = "$UPSTREAM_SHA" ]; then
             echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "update_type=none" >> $GITHUB_OUTPUT
             
             echo "## ✅ Repository is up-to-date with upstream" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
@@ -66,10 +69,21 @@ jobs:
             echo "**Upstream commit:** \`$UPSTREAM_SHORT\`" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "No synchronization needed. The fork is already synchronized with the upstream repository." >> $GITHUB_STEP_SUMMARY
-          else
+          elif [ "$MERGE_BASE" = "$OUR_SHA" ]; then
+            # We can fast-forward
             echo "needs_update=true" >> $GITHUB_OUTPUT
+            echo "update_type=fast_forward" >> $GITHUB_OUTPUT
             
-            # Count commits behind/ahead
+            COMMITS_BEHIND=$(git rev-list --count HEAD..upstream/main)
+            echo "commits_behind=$COMMITS_BEHIND" >> $GITHUB_OUTPUT
+            echo "commits_ahead=0" >> $GITHUB_OUTPUT
+            
+            echo "::notice::Repository can fast-forward $COMMITS_BEHIND commits to upstream"
+          else
+            # We need to merge
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            echo "update_type=merge" >> $GITHUB_OUTPUT
+            
             COMMITS_BEHIND=$(git rev-list --count HEAD..upstream/main)
             COMMITS_AHEAD=$(git rev-list --count upstream/main..HEAD)
             
@@ -77,18 +91,29 @@ jobs:
             echo "commits_ahead=$COMMITS_AHEAD" >> $GITHUB_OUTPUT
             
             echo "::notice::Repository is $COMMITS_AHEAD commits ahead and $COMMITS_BEHIND commits behind upstream"
-            
-            echo "::group::Commits to sync from upstream"
-            git log --oneline HEAD..upstream/main | head -10
-            echo "::endgroup::"
-            
-            echo "::group::Our commits not in upstream"
-            git log --oneline upstream/main..HEAD | head -10
-            echo "::endgroup::"
           fi
 
-      - name: Create sync branch
-        if: steps.check_updates.outputs.needs_update == 'true'
+      - name: Fast-forward update
+        if: steps.check_updates.outputs.needs_update == 'true' && steps.check_updates.outputs.update_type == 'fast_forward'
+        run: |
+          echo "::group::Fast-forward to upstream"
+          
+          # Simple fast-forward merge
+          git merge upstream/main --ff-only
+          
+          # Push directly to main
+          git push origin main
+          
+          echo "## ✅ Fast-forward sync completed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Updated from:** \`${{ steps.check_updates.outputs.our_short }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Updated to:** \`${{ steps.check_updates.outputs.upstream_short }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commits synced:** ${{ steps.check_updates.outputs.commits_behind }}" >> $GITHUB_STEP_SUMMARY
+          
+          echo "::endgroup::"
+
+      - name: Create sync branch for merge
+        if: steps.check_updates.outputs.needs_update == 'true' && steps.check_updates.outputs.update_type == 'merge'
         id: create_branch
         run: |
           # Generate unique branch name
@@ -102,11 +127,11 @@ jobs:
           echo "Starting point: $(git rev-parse --short HEAD)"
           echo "::endgroup::"
 
-      - name: Backup protected files
-        if: steps.check_updates.outputs.needs_update == 'true'
+      - name: Identify protected files
+        if: steps.check_updates.outputs.needs_update == 'true' && steps.check_updates.outputs.update_type == 'merge'
+        id: protected_files
         run: |
-          echo "::group::Backing up protected files"
-          mkdir -p /tmp/protected_files
+          echo "::group::Identifying protected files"
           
           # List of protected files
           PROTECTED_FILES=(
@@ -117,35 +142,46 @@ jobs:
             "Dockerfile"
           )
           
+          # Check which protected files exist and get their content
+          mkdir -p /tmp/protected_backup
+          EXISTING_PROTECTED=""
+          
           for file in "${PROTECTED_FILES[@]}"; do
             if [ -f "$file" ]; then
-              echo "Backing up $file"
-              mkdir -p "/tmp/protected_files/$(dirname "$file")"
-              cp "$file" "/tmp/protected_files/$file"
+              echo "Backing up: $file"
+              mkdir -p "/tmp/protected_backup/$(dirname "$file")"
+              cp "$file" "/tmp/protected_backup/$file"
+              if [ -z "$EXISTING_PROTECTED" ]; then
+                EXISTING_PROTECTED="$file"
+              else
+                EXISTING_PROTECTED="$EXISTING_PROTECTED,$file"
+              fi
             fi
           done
+          
+          echo "existing_protected=$EXISTING_PROTECTED" >> $GITHUB_OUTPUT
           echo "::endgroup::"
 
-      - name: Merge upstream changes
-        if: steps.check_updates.outputs.needs_update == 'true'
+      - name: Merge with upstream using custom strategy
+        if: steps.check_updates.outputs.needs_update == 'true' && steps.check_updates.outputs.update_type == 'merge'
         id: merge_upstream
         run: |
           BRANCH_NAME="${{ steps.create_branch.outputs.branch_name }}"
           
-          echo "::group::Merging upstream changes"
+          echo "::group::Merging upstream changes with protected files strategy"
           
-          # Try to merge upstream/main
-          if git merge upstream/main --no-edit; then
-            echo "Merge successful without conflicts"
+          # First, try to merge with our strategy for protected files
+          if git merge upstream/main -X ours --no-edit; then
+            echo "Merge successful with strategy"
             echo "success=true" >> $GITHUB_OUTPUT
           else
-            echo "Merge conflicts detected, resolving..."
+            echo "Merge conflicts detected, resolving manually..."
             
             # List conflicts
             echo "Conflicted files:"
             git status --porcelain | grep "^UU" | awk '{print $2}'
             
-            # Resolve conflicts: keep theirs for most files, ours for protected files
+            # Resolve conflicts: keep ours for protected files, theirs for others
             git status --porcelain | grep "^UU" | awk '{print $2}' | while read file; do
               case "$file" in
                 .github/workflows/auto-version.yml|\
@@ -166,47 +202,37 @@ jobs:
             
             # Complete the merge
             git commit --no-edit
-            echo "Merge completed with conflict resolution"
             echo "success=true" >> $GITHUB_OUTPUT
           fi
-          echo "::endgroup::"
-
-      - name: Restore protected files
-        if: steps.check_updates.outputs.needs_update == 'true' && steps.merge_upstream.outputs.success == 'true'
-        run: |
-          echo "::group::Restoring protected files"
           
-          PROTECTED_FILES=(
-            ".github/workflows/auto-version.yml"
-            ".github/workflows/build_and_publish_docker.yml"
-            ".github/workflows/sync-upstream.yml"
-            "docker-compose.yml"
-            "Dockerfile"
-          )
-          
+          # Now restore our protected files if they were changed
           CHANGES_MADE=false
+          EXISTING_PROTECTED="${{ steps.protected_files.outputs.existing_protected }}"
           
-          for file in "${PROTECTED_FILES[@]}"; do
-            if [ -f "/tmp/protected_files/$file" ]; then
-              if ! cmp -s "/tmp/protected_files/$file" "$file" 2>/dev/null; then
-                echo "Restoring protected file: $file"
-                mkdir -p "$(dirname "$file")"
-                cp "/tmp/protected_files/$file" "$file"
-                git add "$file"
-                CHANGES_MADE=true
+          if [ -n "$EXISTING_PROTECTED" ]; then
+            IFS=',' read -ra FILES <<< "$EXISTING_PROTECTED"
+            for file in "${FILES[@]}"; do
+              if [ -f "/tmp/protected_backup/$file" ]; then
+                if ! cmp -s "/tmp/protected_backup/$file" "$file" 2>/dev/null; then
+                  echo "Restoring: $file"
+                  cp "/tmp/protected_backup/$file" "$file"
+                  git add "$file"
+                  CHANGES_MADE=true
+                fi
               fi
-            fi
-          done
+            done
+          fi
           
-          # Commit restored files if any changes were made
+          # If we restored files, amend the merge commit instead of creating new one
           if [ "$CHANGES_MADE" = true ]; then
-            git commit -m "Restore protected Docker files after upstream merge"
+            echo "Amending merge commit with restored protected files"
+            git commit --amend --no-edit
           fi
           
           echo "::endgroup::"
 
       - name: Update README with Docker section
-        if: steps.check_updates.outputs.needs_update == 'true' && steps.merge_upstream.outputs.success == 'true'
+        if: steps.check_updates.outputs.needs_update == 'true' && steps.check_updates.outputs.update_type == 'merge' && steps.merge_upstream.outputs.success == 'true'
         run: |
           if ! grep -q "## Docker Image Usage (Fork Enhancement)" README.md; then
             echo "::group::Adding Docker section to README"
@@ -290,12 +316,13 @@ jobs:
             } >> README.md
             
             git add README.md
-            git commit -m "Add Docker usage section to README"
+            # Amend the merge commit instead of creating new one
+            git commit --amend --no-edit
             echo "::endgroup::"
           fi
 
       - name: Push branch and create PR
-        if: steps.check_updates.outputs.needs_update == 'true' && steps.merge_upstream.outputs.success == 'true'
+        if: steps.check_updates.outputs.needs_update == 'true' && steps.check_updates.outputs.update_type == 'merge' && steps.merge_upstream.outputs.success == 'true'
         id: create_pr
         env:
           GITHUB_TOKEN: ${{ secrets.PAT2 }}
@@ -319,13 +346,14 @@ jobs:
           # Get the merge commit message
           MERGE_COMMIT=$(git log -1 --pretty=format:"%s")
           
-          TITLE="docker: Sync with upstream (merge)"
+          TITLE="docker: Sync with upstream (clean merge)"
           BODY="## Automated sync with upstream repository
 
           ### Merge details:
-          - Merged upstream/main into our fork
-          - Protected Docker-related files were preserved
+          - Clean merge of upstream/main into our fork
+          - Protected Docker-related files preserved using git strategies
           - README.md updated with Docker section if needed
+          - **Single commit merge** - no additional commits after merge
 
           ### Protected files (preserved):
           - .github/workflows/auto-version.yml
@@ -339,7 +367,7 @@ jobs:
 
           **Merge commit:** $MERGE_COMMIT
 
-          *This PR uses git merge to properly maintain fork relationship with upstream while preserving our custom changes.*"
+          *This PR uses a clean merge strategy to maintain proper fork relationship with upstream.*"
           
           PR_URL=$(gh pr create \
             --title "$TITLE" \
@@ -358,7 +386,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Auto-merge PR
-        if: steps.check_updates.outputs.needs_update == 'true' && steps.create_pr.outputs.pr_number != ''
+        if: steps.check_updates.outputs.needs_update == 'true' && steps.check_updates.outputs.update_type == 'merge' && steps.create_pr.outputs.pr_number != ''
         env:
           GITHUB_TOKEN: ${{ secrets.PAT2 }}
         run: |
@@ -381,20 +409,16 @@ jobs:
           echo "PR #$PR_NUMBER state: $PR_STATE"
           
           if [ "$PR_STATE" = "OPEN" ]; then
-            # Enable auto-merge
-            echo "Enabling auto-merge for PR #$PR_NUMBER"
-            if gh pr merge $PR_NUMBER --auto --squash --delete-branch --repo ${{ github.repository }}; then
+            # Use merge instead of squash to preserve merge commit structure
+            echo "Enabling auto-merge for PR #$PR_NUMBER with merge strategy"
+            if gh pr merge $PR_NUMBER --auto --merge --delete-branch --repo ${{ github.repository }}; then
               echo "Auto-merge enabled successfully"
             else
               echo "Auto-merge failed, attempting direct merge..."
               sleep 5
               
-              # Check if there are any status checks blocking the merge
-              echo "Checking merge requirements..."
-              gh pr view $PR_NUMBER --repo ${{ github.repository }} --json mergeable,mergeStateStatus
-              
               # Try direct merge
-              if gh pr merge $PR_NUMBER --squash --delete-branch --repo ${{ github.repository }}; then
+              if gh pr merge $PR_NUMBER --merge --delete-branch --repo ${{ github.repository }}; then
                 echo "Direct merge successful"
               else
                 echo "Direct merge also failed. PR may have conflicts or protection rules."
