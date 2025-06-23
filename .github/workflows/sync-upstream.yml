@@ -56,10 +56,16 @@ jobs:
           echo "our_sha=$OUR_SHA" >> $GITHUB_OUTPUT
           echo "our_short=$OUR_SHORT" >> $GITHUB_OUTPUT
           
-          # Check if we can fast-forward to upstream
-          MERGE_BASE=$(git merge-base HEAD upstream/main)
+          # Calculate commits behind and ahead
+          COMMITS_BEHIND=$(git rev-list --count HEAD..upstream/main)
+          COMMITS_AHEAD=$(git rev-list --count upstream/main..HEAD)
           
+          echo "commits_behind=$COMMITS_BEHIND" >> $GITHUB_OUTPUT
+          echo "commits_ahead=$COMMITS_AHEAD" >> $GITHUB_OUTPUT
+          
+          # Check if we need to update
           if [ "$OUR_SHA" = "$UPSTREAM_SHA" ]; then
+            # Exactly the same commit
             echo "needs_update=false" >> $GITHUB_OUTPUT
             echo "update_type=none" >> $GITHUB_OUTPUT
             
@@ -69,28 +75,36 @@ jobs:
             echo "**Upstream commit:** \`$UPSTREAM_SHORT\`" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "No synchronization needed. The fork is already synchronized with the upstream repository." >> $GITHUB_STEP_SUMMARY
-          elif [ "$MERGE_BASE" = "$OUR_SHA" ]; then
-            # We can fast-forward
-            echo "needs_update=true" >> $GITHUB_OUTPUT
-            echo "update_type=fast_forward" >> $GITHUB_OUTPUT
+          elif [ "$COMMITS_BEHIND" = "0" ]; then
+            # We're ahead but not behind - no update needed
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "update_type=none" >> $GITHUB_OUTPUT
             
-            COMMITS_BEHIND=$(git rev-list --count HEAD..upstream/main)
-            echo "commits_behind=$COMMITS_BEHIND" >> $GITHUB_OUTPUT
-            echo "commits_ahead=0" >> $GITHUB_OUTPUT
-            
-            echo "::notice::Repository can fast-forward $COMMITS_BEHIND commits to upstream"
+            echo "## ✅ Repository is ahead of upstream" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Current commit:** \`$OUR_SHORT\`" >> $GITHUB_STEP_SUMMARY
+            echo "**Upstream commit:** \`$UPSTREAM_SHORT\`" >> $GITHUB_STEP_SUMMARY
+            echo "**Commits ahead:** $COMMITS_AHEAD" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "No synchronization needed. The fork is $COMMITS_AHEAD commits ahead of upstream with no new changes to pull." >> $GITHUB_STEP_SUMMARY
+            echo "::notice::Repository is $COMMITS_AHEAD commits ahead and 0 commits behind upstream - no sync needed"
           else
-            # We need to merge
-            echo "needs_update=true" >> $GITHUB_OUTPUT
-            echo "update_type=merge" >> $GITHUB_OUTPUT
+            # We're behind upstream - need to sync
+            MERGE_BASE=$(git merge-base HEAD upstream/main)
             
-            COMMITS_BEHIND=$(git rev-list --count HEAD..upstream/main)
-            COMMITS_AHEAD=$(git rev-list --count upstream/main..HEAD)
-            
-            echo "commits_behind=$COMMITS_BEHIND" >> $GITHUB_OUTPUT
-            echo "commits_ahead=$COMMITS_AHEAD" >> $GITHUB_OUTPUT
-            
-            echo "::notice::Repository is $COMMITS_AHEAD commits ahead and $COMMITS_BEHIND commits behind upstream"
+            if [ "$MERGE_BASE" = "$OUR_SHA" ]; then
+              # We can fast-forward
+              echo "needs_update=true" >> $GITHUB_OUTPUT
+              echo "update_type=fast_forward" >> $GITHUB_OUTPUT
+              
+              echo "::notice::Repository can fast-forward $COMMITS_BEHIND commits to upstream"
+            else
+              # We need to merge
+              echo "needs_update=true" >> $GITHUB_OUTPUT
+              echo "update_type=merge" >> $GITHUB_OUTPUT
+              
+              echo "::notice::Repository is $COMMITS_AHEAD commits ahead and $COMMITS_BEHIND commits behind upstream"
+            fi
           fi
 
       - name: Fast-forward update
