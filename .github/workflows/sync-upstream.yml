@@ -1,0 +1,444 @@
+name: Sync with Upstream
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # Every hour
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PAT }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Setup remotes and fetch
+        run: |
+          # Add upstream remote
+          git remote add upstream https://github.com/BeehiveInnovations/gemini-mcp-server.git || true
+          
+          # Fetch all branches and tags
+          git fetch --all --tags --prune
+          
+          # Debug info
+          echo "::group::Repository state"
+          echo "Current branch: $(git branch --show-current)"
+          echo "Remotes:"
+          git remote -v
+          echo "::endgroup::"
+
+      - name: Check for updates
+        id: check_updates
+        run: |
+          # Make sure we're on main
+          git checkout main
+          
+          # Get latest commits
+          UPSTREAM_SHA=$(git rev-parse upstream/main)
+          UPSTREAM_SHORT=$(git rev-parse --short upstream/main)
+          OUR_SHA=$(git rev-parse HEAD)
+          OUR_SHORT=$(git rev-parse --short HEAD)
+          
+          echo "upstream_sha=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
+          echo "upstream_short=$UPSTREAM_SHORT" >> $GITHUB_OUTPUT
+          echo "our_sha=$OUR_SHA" >> $GITHUB_OUTPUT
+          echo "our_short=$OUR_SHORT" >> $GITHUB_OUTPUT
+          
+          # Calculate commits behind and ahead
+          COMMITS_BEHIND=$(git rev-list --count HEAD..upstream/main)
+          COMMITS_AHEAD=$(git rev-list --count upstream/main..HEAD)
+          
+          echo "commits_behind=$COMMITS_BEHIND" >> $GITHUB_OUTPUT
+          echo "commits_ahead=$COMMITS_AHEAD" >> $GITHUB_OUTPUT
+          
+          # Check if we need to update
+          if [ "$OUR_SHA" = "$UPSTREAM_SHA" ]; then
+            # Exactly the same commit
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "update_type=none" >> $GITHUB_OUTPUT
+            
+            echo "## ✅ Repository is up-to-date with upstream" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Current commit:** \`$OUR_SHORT\`" >> $GITHUB_STEP_SUMMARY
+            echo "**Upstream commit:** \`$UPSTREAM_SHORT\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "No synchronization needed. The fork is already synchronized with the upstream repository." >> $GITHUB_STEP_SUMMARY
+          elif [ "$COMMITS_BEHIND" = "0" ]; then
+            # We're ahead but not behind - no update needed
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "update_type=none" >> $GITHUB_OUTPUT
+            
+            echo "## ✅ Repository is ahead of upstream" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Current commit:** \`$OUR_SHORT\`" >> $GITHUB_STEP_SUMMARY
+            echo "**Upstream commit:** \`$UPSTREAM_SHORT\`" >> $GITHUB_STEP_SUMMARY
+            echo "**Commits ahead:** $COMMITS_AHEAD" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "No synchronization needed. The fork is $COMMITS_AHEAD commits ahead of upstream with no new changes to pull." >> $GITHUB_STEP_SUMMARY
+            echo "::notice::Repository is $COMMITS_AHEAD commits ahead and 0 commits behind upstream - no sync needed"
+          else
+            # We're behind upstream - need to sync
+            MERGE_BASE=$(git merge-base HEAD upstream/main)
+            
+            if [ "$MERGE_BASE" = "$OUR_SHA" ]; then
+              # We can fast-forward
+              echo "needs_update=true" >> $GITHUB_OUTPUT
+              echo "update_type=fast_forward" >> $GITHUB_OUTPUT
+              
+              echo "::notice::Repository can fast-forward $COMMITS_BEHIND commits to upstream"
+            else
+              # We need to merge
+              echo "needs_update=true" >> $GITHUB_OUTPUT
+              echo "update_type=merge" >> $GITHUB_OUTPUT
+              
+              echo "::notice::Repository is $COMMITS_AHEAD commits ahead and $COMMITS_BEHIND commits behind upstream"
+            fi
+          fi
+
+      - name: Fast-forward update
+        if: steps.check_updates.outputs.needs_update == 'true' && steps.check_updates.outputs.update_type == 'fast_forward'
+        run: |
+          echo "::group::Fast-forward to upstream"
+          
+          # Simple fast-forward merge
+          git merge upstream/main --ff-only
+          
+          # Push directly to main
+          git push origin main
+          
+          echo "## ✅ Fast-forward sync completed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Updated from:** \`${{ steps.check_updates.outputs.our_short }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Updated to:** \`${{ steps.check_updates.outputs.upstream_short }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commits synced:** ${{ steps.check_updates.outputs.commits_behind }}" >> $GITHUB_STEP_SUMMARY
+          
+          echo "::endgroup::"
+
+      - name: Create sync branch for merge
+        if: steps.check_updates.outputs.needs_update == 'true' && steps.check_updates.outputs.update_type == 'merge'
+        id: create_branch
+        run: |
+          # Generate unique branch name
+          BRANCH_NAME="sync/upstream-$(date +%Y%m%d-%H%M%S)"
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          
+          echo "::group::Creating sync branch"
+          # Create new branch from current main
+          git checkout -b $BRANCH_NAME main
+          echo "Created branch: $BRANCH_NAME"
+          echo "Starting point: $(git rev-parse --short HEAD)"
+          echo "::endgroup::"
+
+      - name: Identify protected files
+        if: steps.check_updates.outputs.needs_update == 'true' && steps.check_updates.outputs.update_type == 'merge'
+        id: protected_files
+        run: |
+          echo "::group::Identifying protected files"
+          
+          # List of protected files
+          PROTECTED_FILES=(
+            ".github/workflows/auto-version.yml"
+            ".github/workflows/build_and_publish_docker.yml"
+            ".github/workflows/sync-upstream.yml"
+            "docker-compose.yml"
+            "Dockerfile"
+          )
+          
+          # Check which protected files exist and get their content
+          mkdir -p /tmp/protected_backup
+          EXISTING_PROTECTED=""
+          
+          for file in "${PROTECTED_FILES[@]}"; do
+            if [ -f "$file" ]; then
+              echo "Backing up: $file"
+              mkdir -p "/tmp/protected_backup/$(dirname "$file")"
+              cp "$file" "/tmp/protected_backup/$file"
+              if [ -z "$EXISTING_PROTECTED" ]; then
+                EXISTING_PROTECTED="$file"
+              else
+                EXISTING_PROTECTED="$EXISTING_PROTECTED,$file"
+              fi
+            fi
+          done
+          
+          echo "existing_protected=$EXISTING_PROTECTED" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+
+      - name: Merge with upstream using custom strategy
+        if: steps.check_updates.outputs.needs_update == 'true' && steps.check_updates.outputs.update_type == 'merge'
+        id: merge_upstream
+        run: |
+          BRANCH_NAME="${{ steps.create_branch.outputs.branch_name }}"
+          
+          echo "::group::Merging upstream changes with protected files strategy"
+          
+          # First, try to merge with our strategy for protected files
+          if git merge upstream/main -X ours --no-edit; then
+            echo "Merge successful with strategy"
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "Merge conflicts detected, resolving manually..."
+            
+            # List conflicts
+            echo "Conflicted files:"
+            git status --porcelain | grep "^UU" | awk '{print $2}'
+            
+            # Resolve conflicts: keep ours for protected files, theirs for others
+            git status --porcelain | grep "^UU" | awk '{print $2}' | while read file; do
+              case "$file" in
+                .github/workflows/auto-version.yml|\
+                .github/workflows/build_and_publish_docker.yml|\
+                .github/workflows/sync-upstream.yml|\
+                docker-compose.yml|\
+                Dockerfile)
+                  echo "Keeping our version of $file"
+                  git checkout --ours "$file"
+                  ;;
+                *)
+                  echo "Accepting upstream version of $file"
+                  git checkout --theirs "$file"
+                  ;;
+              esac
+              git add "$file"
+            done
+            
+            # Complete the merge
+            git commit --no-edit
+            echo "success=true" >> $GITHUB_OUTPUT
+          fi
+          
+          # Now restore our protected files if they were changed
+          CHANGES_MADE=false
+          EXISTING_PROTECTED="${{ steps.protected_files.outputs.existing_protected }}"
+          
+          if [ -n "$EXISTING_PROTECTED" ]; then
+            IFS=',' read -ra FILES <<< "$EXISTING_PROTECTED"
+            for file in "${FILES[@]}"; do
+              if [ -f "/tmp/protected_backup/$file" ]; then
+                if ! cmp -s "/tmp/protected_backup/$file" "$file" 2>/dev/null; then
+                  echo "Restoring: $file"
+                  cp "/tmp/protected_backup/$file" "$file"
+                  git add "$file"
+                  CHANGES_MADE=true
+                fi
+              fi
+            done
+          fi
+          
+          # If we restored files, amend the merge commit instead of creating new one
+          if [ "$CHANGES_MADE" = true ]; then
+            echo "Amending merge commit with restored protected files"
+            git commit --amend --no-edit
+          fi
+          
+          echo "::endgroup::"
+
+      - name: Update README with Docker section
+        if: steps.check_updates.outputs.needs_update == 'true' && steps.check_updates.outputs.update_type == 'merge' && steps.merge_upstream.outputs.success == 'true'
+        run: |
+          if ! grep -q "## Docker Image Usage (Fork Enhancement)" README.md; then
+            echo "::group::Adding Docker section to README"
+            {
+              echo ""
+              echo "## Docker Image Usage (Fork Enhancement)"
+              echo ""
+              echo "This fork maintains Docker support with pre-built images available at GitHub Container Registry."
+              echo ""
+              echo "### Quick Start with Docker"
+              echo ""
+              echo "**Basic Configuration (Gemini only):**"
+              echo '```json'
+              echo '{'
+              echo '  "mcpServers": {'
+              echo '    "zen": {'
+              echo '      "command": "docker",'
+              echo '      "args": ['
+              echo '        "run", "--rm", "-i",'
+              echo '        "-e", "GEMINI_API_KEY=<your_api_key_from_google_ai_studio>",'
+              echo '        "-v", "<path_to_your_workspace>:<path_to_your_workspace>",'
+              echo '        "ghcr.io/patrykiti/zen-mcp-server:latest"'
+              echo '      ]'
+              echo '    }'
+              echo '  }'
+              echo '}'
+              echo '```'
+              echo ""
+              echo "**Full Configuration (All Providers):**"
+              echo '```json'
+              echo '{'
+              echo '  "mcpServers": {'
+              echo '    "zen": {'
+              echo '      "command": "docker",'
+              echo '      "args": ['
+              echo '        "run", "--rm", "-i",'
+              echo '        "-e", "GEMINI_API_KEY=<your-gemini-key>",'
+              echo '        "-e", "OPENAI_API_KEY=<your-openai-key>",'
+              echo '        "-e", "XAI_API_KEY=<your-xai-key>",'
+              echo '        "-e", "OPENROUTER_API_KEY=<your-openrouter-key>",'
+              echo '        "-e", "CUSTOM_API_URL=http://host.docker.internal:11434/v1",'
+              echo '        "-e", "CUSTOM_API_KEY=",'
+              echo '        "-e", "CUSTOM_MODEL_NAME=llama3.2",'
+              echo '        "-e", "DEFAULT_MODEL=auto",'
+              echo '        "-e", "OPENAI_ALLOWED_MODELS=o3-mini,o4-mini",'
+              echo '        "-e", "GOOGLE_ALLOWED_MODELS=flash,pro",'
+              echo '        "-e", "XAI_ALLOWED_MODELS=grok,grok-3-fast",'
+              echo '        "-e", "OPENROUTER_ALLOWED_MODELS=opus,sonnet,mistral",'
+              echo '        "-e", "OPENROUTER_REFERER=https://your-app.com",'
+              echo '        "-e", "OPENROUTER_TITLE=Your App Name",'
+              echo '        "-e", "CUSTOM_MODELS_CONFIG_PATH=/path/to/custom_models.json",'
+              echo '        "-e", "DEFAULT_THINKING_MODE_THINKDEEP=high",'
+              echo '        "-e", "CONVERSATION_TIMEOUT_HOURS=5",'
+              echo '        "-e", "MAX_CONVERSATION_TURNS=20",'
+              echo '        "-e", "LOG_LEVEL=INFO",'
+              echo '        "-v", "<path_to_your_workspace>:<path_to_your_workspace>",'
+              echo '        "ghcr.io/patrykiti/zen-mcp-server:latest"'
+              echo '      ]'
+              echo '    }'
+              echo '  }'
+              echo '}'
+              echo '```'
+              echo ""
+              echo "**Note:** Replace \`<path_to_your_workspace>\` with the directory where your projects are located."
+              echo ""
+              echo "### Using Docker Compose"
+              echo ""
+              echo '```bash'
+              echo "git clone https://github.com/PatrykIti/zen-mcp-server.git"
+              echo "cd zen-mcp-server"
+              echo "cp .env.example .env"
+              echo "nano .env"
+              echo "docker-compose up -d"
+              echo '```'
+              echo ""
+              echo "### Available Tags"
+              echo "- \`ghcr.io/patrykiti/zen-mcp-server:latest\` - Always the newest version"
+              echo "- \`ghcr.io/patrykiti/zen-mcp-server:v5.2.4\` - Specific version"
+              echo ""
+              echo "For more details, see the [Docker setup guide](docker-compose.yml) in this repository."
+            } >> README.md
+            
+            git add README.md
+            # Amend the merge commit instead of creating new one
+            git commit --amend --no-edit
+            echo "::endgroup::"
+          fi
+
+      - name: Push branch and create PR
+        if: steps.check_updates.outputs.needs_update == 'true' && steps.check_updates.outputs.update_type == 'merge' && steps.merge_upstream.outputs.success == 'true'
+        id: create_pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT2 }}
+        run: |
+          BRANCH_NAME="${{ steps.create_branch.outputs.branch_name }}"
+          
+          echo "::group::Final verification"
+          echo "Current branch: $(git branch --show-current)"
+          echo "Commits in this branch not in main:"
+          git log --oneline main..HEAD
+          echo "::endgroup::"
+          
+          # Push branch
+          echo "::group::Pushing branch"
+          git push origin $BRANCH_NAME
+          echo "::endgroup::"
+          
+          # Create PR
+          echo "::group::Creating Pull Request"
+          
+          # Get the merge commit message
+          MERGE_COMMIT=$(git log -1 --pretty=format:"%s")
+          
+          TITLE="docker: Sync with upstream (clean merge)"
+          BODY="## Automated sync with upstream repository
+
+          ### Merge details:
+          - Clean merge of upstream/main into our fork
+          - Protected Docker-related files preserved using git strategies
+          - README.md updated with Docker section if needed
+          - **Single commit merge** - no additional commits after merge
+
+          ### Protected files (preserved):
+          - .github/workflows/auto-version.yml
+          - .github/workflows/build_and_publish_docker.yml  
+          - .github/workflows/sync-upstream.yml
+          - docker-compose.yml
+          - Dockerfile
+
+          **Upstream commit:** \`${{ steps.check_updates.outputs.upstream_short }}\`
+          **Our base commit:** \`${{ steps.check_updates.outputs.our_short }}\`
+
+          **Merge commit:** $MERGE_COMMIT
+
+          *This PR uses a clean merge strategy to maintain proper fork relationship with upstream.*"
+          
+          PR_URL=$(gh pr create \
+            --title "$TITLE" \
+            --body "$BODY" \
+            --base main \
+            --head "$BRANCH_NAME" \
+            --repo ${{ github.repository }})
+          
+          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
+          
+          # Extract PR number
+          PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          
+          echo "Pull request created: #$PR_NUMBER"
+          echo "::endgroup::"
+
+      - name: Auto-merge PR
+        if: steps.check_updates.outputs.needs_update == 'true' && steps.check_updates.outputs.update_type == 'merge' && steps.create_pr.outputs.pr_number != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT2 }}
+        run: |
+          PR_NUMBER="${{ steps.create_pr.outputs.pr_number }}"
+          
+          echo "Waiting for PR checks to initialize..."
+          sleep 15
+          
+          # Check if PR exists first
+          echo "Verifying PR #$PR_NUMBER exists..."
+          if ! gh pr view $PR_NUMBER --repo ${{ github.repository }} >/dev/null 2>&1; then
+            echo "Error: PR #$PR_NUMBER does not exist or cannot be accessed"
+            echo "Available PRs:"
+            gh pr list --repo ${{ github.repository }} --state open
+            exit 1
+          fi
+          
+          # Check PR status
+          PR_STATE=$(gh pr view $PR_NUMBER --repo ${{ github.repository }} --json state --jq '.state')
+          echo "PR #$PR_NUMBER state: $PR_STATE"
+          
+          if [ "$PR_STATE" = "OPEN" ]; then
+            # Use merge instead of squash to preserve merge commit structure
+            echo "Enabling auto-merge for PR #$PR_NUMBER with merge strategy"
+            if gh pr merge $PR_NUMBER --auto --merge --delete-branch --repo ${{ github.repository }}; then
+              echo "Auto-merge enabled successfully"
+            else
+              echo "Auto-merge failed, attempting direct merge..."
+              sleep 5
+              
+              # Try direct merge
+              if gh pr merge $PR_NUMBER --merge --delete-branch --repo ${{ github.repository }}; then
+                echo "Direct merge successful"
+              else
+                echo "Direct merge also failed. PR may have conflicts or protection rules."
+                echo "PR will remain open for manual review."
+              fi
+            fi
+          else
+            echo "PR is not in OPEN state (current: $PR_STATE). Skipping merge."
+          fi
