@@ -2,6 +2,52 @@
 
 <!-- version list -->
 
+## v5.12.0 (2025-10-01)
+
+### Bug Fixes
+
+- Removed use_websearch; this parameter was confusing Codex. It started using this to prompt the
+  external model to perform searches! web-search is enabled by Claude / Codex etc by default and the
+  external agent can ask claude to search on its behalf.
+  ([`cff6d89`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/cff6d8998f64b73265c4e31b2352462d6afe377f))
+
+### Chores
+
+- Sync version to config.py [skip ci]
+  ([`28cabe0`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/28cabe0833661b0bab56d4227781ee2da332b00c))
+
+### Features
+
+- Implement semantic cassette matching for o3 models
+  ([`70fa088`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/70fa088c32ac4e6153d5e7b30a3e32022be2f908))
+
+
+## v5.11.2 (2025-10-01)
+
+### Chores
+
+- Sync version to config.py [skip ci]
+  ([`4d6f1b4`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/4d6f1b41005dee428c955e33f04f8f9f6259e662))
+
+
+## v5.11.1 (2025-10-01)
+
+### Bug Fixes
+
+- Remove duplicate OpenAI models from listmodels output
+  ([`c29e762`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/c29e7623ace257eb45396cdf8c19e1659e29edb9))
+
+### Chores
+
+- Sync version to config.py [skip ci]
+  ([`1209064`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/12090646ee83f2368311d595d87ae947e46ddacd))
+
+### Testing
+
+- Update OpenAI provider alias tests to match new format
+  ([`d13700c`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/d13700c14c7ee3d092302837cb1726d17bab1ab8))
+
+
 ## v5.11.0 (2025-08-26)
 
 ### Chores
