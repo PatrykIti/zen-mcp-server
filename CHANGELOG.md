@@ -2,6 +2,68 @@
 
 <!-- version list -->
 
+## v5.14.0 (2025-10-01)
+
+### Chores
+
+- Sync version to config.py [skip ci]
+  ([`c0f822f`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/c0f822ffa23292d668f7b5dd3cb62e3f23fb29af))
+
+### Features
+
+- Add Claude Sonnet 4.5 and update alias configuration
+  ([`95c4822`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/95c4822af2dc55f59c0e4ed9454673d6ca964731))
+
+### Testing
+
+- Update tests to match new Claude Sonnet 4.5 alias configuration
+  ([`7efb409`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/7efb4094d4eb7db006340d3d9240b9113ac25cd3))
+
+
+## v5.13.0 (2025-10-01)
+
+### Bug Fixes
+
+- Add sonnet alias for Claude Sonnet 4.1 to match opus/haiku pattern
+  ([`dc96344`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/dc96344db043e087ee4f8bf264a79c51dc2e0b7a))
+
+- Missing "optenai/" in name
+  ([`7371ed6`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/7371ed6487b7d90a1b225a67dca2a38c1a52f2ad))
+
+### Chores
+
+- Sync version to config.py [skip ci]
+  ([`b8479fc`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/b8479fc638083d6caa4bad6205e3d3fcab830aca))
+
+### Features
+
+- Add comprehensive GPT-5 series model support
+  ([`4930824`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/493082405237e66a2f033481a5f8bf8293b0d553))
+
+
+## v5.12.1 (2025-10-01)
+
+### Bug Fixes
+
+- Resolve consensus tool model_context parameter missing issue
+  ([`9044b63`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/9044b63809113047fe678d659e4fcd175f58e87a))
+
+### Chores
+
+- Sync version to config.py [skip ci]
+  ([`e3ebf4e`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/e3ebf4e94eba63acdc4df5a0b0493e44e3343dd1))
+
+### Code Style
+
+- Fix trailing whitespace in consensus.py
+  ([`0760b31`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/0760b31f8a6d03c4bea3fd2a94dfbbfab0ad5079))
+
+### Refactoring
+
+- Optimize ModelContext creation in consensus tool
+  ([`30a8952`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/30a8952fbccd22bebebd14eb2c8005404b79bcd6))
+
+
 ## v5.12.0 (2025-10-01)
 
 ### Bug Fixes
