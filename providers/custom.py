@@ -4,15 +4,15 @@ import logging
 import os
 from typing import Optional
 
-from .base import (
+from .openai_compatible import OpenAICompatibleProvider
+from .openrouter_registry import OpenRouterModelRegistry
+from .shared import (
     FixedTemperatureConstraint,
     ModelCapabilities,
     ModelResponse,
     ProviderType,
     RangeTemperatureConstraint,
 )
-from .openai_compatible import OpenAICompatibleProvider
-from .openrouter_registry import OpenRouterModelRegistry
 
 # Temperature inference patterns
 _TEMP_UNSUPPORTED_PATTERNS = [
@@ -30,10 +30,13 @@ _TEMP_UNSUPPORTED_KEYWORDS = [
 
 
 class CustomProvider(OpenAICompatibleProvider):
-    """Custom API provider for local models.
+    """Adapter for self-hosted or local OpenAI-compatible endpoints.
 
-    Supports local inference servers like Ollama, vLLM, LM Studio,
-    and any OpenAI-compatible API endpoint.
+    The provider reuses the :mod:`providers.shared` registry to surface
+    user-defined aliases and capability metadata.  It also normalises
+    Ollama-style version tags (``model:latest``) and enforces the same
+    restriction policies used by cloud providers, ensuring consistent
+    behaviour regardless of where the model is hosted.
     """
 
     FRIENDLY_NAME = "Custom API"
@@ -364,13 +367,3 @@ class CustomProvider(OpenAICompatibleProvider):
                         configs[model_name] = config
 
         return configs
-
-    def get_all_model_aliases(self) -> dict[str, list[str]]:
-        """Get all model aliases from the registry.
-
-        Returns:
-            Dictionary mapping model names to their list of aliases
-        """
-        # Since aliases are now included in the configurations,
-        # we can use the base class implementation
-        return super().get_all_model_aliases()

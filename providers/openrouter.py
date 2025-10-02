@@ -4,21 +4,22 @@ import logging
 import os
 from typing import Optional
 
-from .base import (
+from .openai_compatible import OpenAICompatibleProvider
+from .openrouter_registry import OpenRouterModelRegistry
+from .shared import (
     ModelCapabilities,
     ModelResponse,
     ProviderType,
     RangeTemperatureConstraint,
 )
-from .openai_compatible import OpenAICompatibleProvider
-from .openrouter_registry import OpenRouterModelRegistry
 
 
 class OpenRouterProvider(OpenAICompatibleProvider):
-    """OpenRouter unified API provider.
+    """Client for OpenRouter's multi-model aggregation service.
 
-    OpenRouter provides access to multiple AI models through a single API endpoint.
-    See https://openrouter.ai for available models and pricing.
+    OpenRouter surfaces dozens of upstream vendors.  This provider layers alias
+    resolution, restriction-aware filtering, and sensible capability defaults
+    on top of the generic OpenAI-compatible plumbing.
     """
 
     FRIENDLY_NAME = "OpenRouter"
@@ -298,13 +299,3 @@ class OpenRouterProvider(OpenAICompatibleProvider):
                         configs[model_name] = config
 
         return configs
-
-    def get_all_model_aliases(self) -> dict[str, list[str]]:
-        """Get all model aliases from the registry.
-
-        Returns:
-            Dictionary mapping model names to their list of aliases
-        """
-        # Since aliases are now included in the configurations,
-        # we can use the base class implementation
-        return super().get_all_model_aliases()
