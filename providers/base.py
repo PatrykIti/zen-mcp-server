@@ -28,7 +28,7 @@ class ModelProvider(ABC):
     """
 
     # All concrete providers must define their supported models
-    SUPPORTED_MODELS: dict[str, Any] = {}
+    MODEL_CAPABILITIES: dict[str, Any] = {}
 
     # Default maximum image size in MB
     DEFAULT_MAX_IMAGE_SIZE_MB = 20.0
@@ -83,43 +83,6 @@ class ModelProvider(ABC):
         """Validate if the model name is supported by this provider."""
         pass
 
-    def get_effective_temperature(self, model_name: str, requested_temperature: float) -> Optional[float]:
-        """Get the effective temperature to use for a model given a requested temperature.
-
-        This method handles:
-        - Models that don't support temperature (returns None)
-        - Fixed temperature models (returns the fixed value)
-        - Clamping to min/max range for models with constraints
-
-        Args:
-            model_name: The model to get temperature for
-            requested_temperature: The temperature requested by the user/tool
-
-        Returns:
-            The effective temperature to use, or None if temperature shouldn't be passed
-        """
-        try:
-            capabilities = self.get_capabilities(model_name)
-
-            # Check if model supports temperature at all
-            if not capabilities.supports_temperature:
-                return None
-
-            # Use temperature constraint to get corrected value
-            corrected_temp = capabilities.temperature_constraint.get_corrected_value(requested_temperature)
-
-            if corrected_temp != requested_temperature:
-                logger.debug(
-                    f"Adjusting temperature from {requested_temperature} to {corrected_temp} for model {model_name}"
-                )
-
-            return corrected_temp
-
-        except Exception as e:
-            logger.debug(f"Could not determine effective temperature for {model_name}: {e}")
-            # If we can't get capabilities, return the requested temperature
-            return requested_temperature
-
     def validate_parameters(self, model_name: str, temperature: float, **kwargs) -> None:
         """Validate model parameters against capabilities.
 
@@ -147,9 +110,9 @@ class ModelProvider(ABC):
         Returns:
             Dictionary mapping model names to their ModelCapabilities objects
         """
-        # Return SUPPORTED_MODELS if it exists (must contain ModelCapabilities objects)
-        if hasattr(self, "SUPPORTED_MODELS"):
-            return {k: v for k, v in self.SUPPORTED_MODELS.items() if isinstance(v, ModelCapabilities)}
+        model_map = getattr(self, "MODEL_CAPABILITIES", None)
+        if isinstance(model_map, dict) and model_map:
+            return {k: v for k, v in model_map.items() if isinstance(v, ModelCapabilities)}
         return {}
 
     def _resolve_model_name(self, model_name: str) -> str:
