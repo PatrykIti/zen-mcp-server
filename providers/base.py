@@ -1,16 +1,11 @@
 """Base interfaces and common behaviour for model providers."""
 
-import base64
-import binascii
 import logging
-import os
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from tools.models import ToolModelCategory
-
-from utils.file_types import IMAGES, get_image_mime_type
 
 from .shared import ModelCapabilities, ModelResponse, ProviderType
 
@@ -42,9 +37,6 @@ class ModelProvider(ABC):
 
     # All concrete providers must define their supported models
     MODEL_CAPABILITIES: dict[str, Any] = {}
-
-    # Default maximum image size in MB
-    DEFAULT_MAX_IMAGE_SIZE_MB = 20.0
 
     def __init__(self, api_key: str, **kwargs):
         """Initialize the provider with API key and optional configuration."""
@@ -81,10 +73,24 @@ class ModelProvider(ABC):
         """
         pass
 
-    @abstractmethod
     def count_tokens(self, text: str, model_name: str) -> int:
-        """Count tokens for the given text using the specified model's tokenizer."""
-        pass
+        """Estimate token usage for a piece of text.
+
+        Providers can rely on this shared implementation or override it when
+        they expose a more accurate tokenizer. This default uses a simple
+        character-based heuristic so it works even without provider-specific
+        tooling.
+        """
+
+        resolved_model = self._resolve_model_name(model_name)
+
+        if not text:
+            return 0
+
+        # Rough estimation: ~4 characters per token for English text
+        estimated = max(1, len(text) // 4)
+        logger.debug("Estimating %s tokens for model %s via character heuristic", estimated, resolved_model)
+        return estimated
 
     @abstractmethod
     def get_provider_type(self) -> ProviderType:
@@ -108,11 +114,6 @@ class ModelProvider(ABC):
         if not capabilities.temperature_constraint.validate(temperature):
             constraint_desc = capabilities.temperature_constraint.get_description()
             raise ValueError(f"Temperature {temperature} is invalid for model {model_name}. {constraint_desc}")
-
-    @abstractmethod
-    def supports_thinking_mode(self, model_name: str) -> bool:
-        """Check if the model supports extended thinking mode."""
-        pass
 
     def get_model_configurations(self) -> dict[str, ModelCapabilities]:
         """Get model configurations for this provider.
@@ -172,17 +173,7 @@ class ModelProvider(ABC):
         lowercase: bool = False,
         unique: bool = False,
     ) -> list[str]:
-        """Return formatted model names supported by this provider.
-
-        Args:
-            respect_restrictions: Apply provider restriction policy.
-            include_aliases: Include aliases alongside canonical model names.
-            lowercase: Normalize returned names to lowercase.
-            unique: Deduplicate names after formatting.
-
-        Returns:
-            List of model names formatted according to the provided options.
-        """
+        """Return formatted model names supported by this provider."""
 
         model_configs = self.get_model_configurations()
         if not model_configs:
@@ -210,77 +201,6 @@ class ModelProvider(ABC):
             lowercase=lowercase,
             unique=unique,
         )
-
-    def validate_image(self, image_path: str, max_size_mb: float = None) -> tuple[bytes, str]:
-        """Provider-independent image validation.
-
-        Args:
-            image_path: Path to image file or data URL
-            max_size_mb: Maximum allowed image size in MB (defaults to DEFAULT_MAX_IMAGE_SIZE_MB)
-
-        Returns:
-            Tuple of (image_bytes, mime_type)
-
-        Raises:
-            ValueError: If image is invalid
-
-        Examples:
-            # Validate a file path
-            image_bytes, mime_type = provider.validate_image("/path/to/image.png")
-
-            # Validate a data URL
-            image_bytes, mime_type = provider.validate_image("data:image/png;base64,...")
-
-            # Validate with custom size limit
-            image_bytes, mime_type = provider.validate_image("/path/to/image.jpg", max_size_mb=10.0)
-        """
-        # Use default if not specified
-        if max_size_mb is None:
-            max_size_mb = self.DEFAULT_MAX_IMAGE_SIZE_MB
-
-        if image_path.startswith("data:"):
-            # Parse data URL: data:image/png;base64,iVBORw0...
-            try:
-                header, data = image_path.split(",", 1)
-                mime_type = header.split(";")[0].split(":")[1]
-            except (ValueError, IndexError) as e:
-                raise ValueError(f"Invalid data URL format: {e}")
-
-            # Validate MIME type using IMAGES constant
-            valid_mime_types = [get_image_mime_type(ext) for ext in IMAGES]
-            if mime_type not in valid_mime_types:
-                raise ValueError(f"Unsupported image type: {mime_type}. Supported types: {', '.join(valid_mime_types)}")
-
-            # Decode base64 data
-            try:
-                image_bytes = base64.b64decode(data)
-            except binascii.Error as e:
-                raise ValueError(f"Invalid base64 data: {e}")
-        else:
-            # Handle file path
-            # Read file first to check if it exists
-            try:
-                with open(image_path, "rb") as f:
-                    image_bytes = f.read()
-            except FileNotFoundError:
-                raise ValueError(f"Image file not found: {image_path}")
-            except Exception as e:
-                raise ValueError(f"Failed to read image file: {e}")
-
-            # Validate extension
-            ext = os.path.splitext(image_path)[1].lower()
-            if ext not in IMAGES:
-                raise ValueError(f"Unsupported image format: {ext}. Supported formats: {', '.join(sorted(IMAGES))}")
-
-            # Get MIME type
-            mime_type = get_image_mime_type(ext)
-
-        # Validate size
-        size_mb = len(image_bytes) / (1024 * 1024)
-        if size_mb > max_size_mb:
-            raise ValueError(f"Image too large: {size_mb:.1f}MB (max: {max_size_mb}MB)")
-
-        return image_bytes, mime_type
 
     def close(self):
         """Clean up any resources held by the provider.

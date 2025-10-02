@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 
 from openai import OpenAI
 
+from utils.image_utils import validate_image
+
 from .base import ModelProvider
 from .shared import (
     ModelCapabilities,
@@ -532,16 +534,14 @@ class OpenAICompatibleProvider(ModelProvider):
         resolved_model = self._resolve_model_name(model_name)
 
         # Use the effective temperature we calculated earlier
-        if effective_temperature is not None:
+        supports_sampling = effective_temperature is not None
+
+        if supports_sampling:
             completion_params["temperature"] = effective_temperature
-            supports_temperature = True
-        else:
-            # Model doesn't support temperature
-            supports_temperature = False
 
         # Add max tokens if specified and model supports it
         # O3/O4 models that don't support temperature also don't support max_tokens
-        if max_output_tokens and supports_temperature:
+        if max_output_tokens and supports_sampling:
             completion_params["max_tokens"] = max_output_tokens
 
         # Add any additional OpenAI-specific parameters
@@ -549,7 +549,7 @@ class OpenAICompatibleProvider(ModelProvider):
         for key, value in kwargs.items():
             if key in ["top_p", "frequency_penalty", "presence_penalty", "seed", "stop", "stream"]:
                 # Reasoning models (those that don't support temperature) also don't support these parameters
-                if not supports_temperature and key in ["top_p", "frequency_penalty", "presence_penalty"]:
+                if not supports_sampling and key in ["top_p", "frequency_penalty", "presence_penalty"]:
                     continue  # Skip unsupported parameters for reasoning models
                 completion_params[key] = value
 
@@ -620,50 +620,6 @@ class OpenAICompatibleProvider(ModelProvider):
         logging.error(error_msg)
         raise RuntimeError(error_msg) from last_exception
 
-    def count_tokens(self, text: str, model_name: str) -> int:
-        """Count tokens for the given text.
-
-        Uses a layered approach:
-        1. Try provider-specific token counting endpoint
-        2. Try tiktoken for known model families
-        3. Fall back to character-based estimation
-
-        Args:
-            text: Text to count tokens for
-            model_name: Model name for tokenizer selection
-
-        Returns:
-            Estimated token count
-        """
-        # 1. Check if provider has a remote token counting endpoint
-        if hasattr(self, "count_tokens_remote"):
-            try:
-                return self.count_tokens_remote(text, model_name)
-            except Exception as e:
-                logging.debug(f"Remote token counting failed: {e}")
-
-        # 2. Try tiktoken for known models
-        try:
-            import tiktoken
-
-            # Try to get encoding for the specific model
-            try:
-                encoding = tiktoken.encoding_for_model(model_name)
-            except KeyError:
-                encoding = tiktoken.get_encoding("cl100k_base")
-
-            return len(encoding.encode(text))
-
-        except (ImportError, Exception) as e:
-            logging.debug(f"Tiktoken not available or failed: {e}")
-
-        # 3. Fall back to character-based estimation
-        logging.warning(
-            f"No specific tokenizer available for '{model_name}'. "
-            "Using character-based estimation (~4 chars per token)."
-        )
-        return len(text) // 4
-
     def validate_parameters(self, model_name: str, temperature: float, **kwargs) -> None:
         """Validate model parameters.
 
@@ -710,6 +666,26 @@ class OpenAICompatibleProvider(ModelProvider):
 
         return usage
 
+    def count_tokens(self, text: str, model_name: str) -> int:
+        """Count tokens using OpenAI-compatible tokenizer tables when available."""
+
+        resolved_model = self._resolve_model_name(model_name)
+
+        try:
+            import tiktoken
+
+            try:
+                encoding = tiktoken.encoding_for_model(resolved_model)
+            except KeyError:
+                encoding = tiktoken.get_encoding("cl100k_base")
+
+            return len(encoding.encode(text))
+
+        except (ImportError, Exception) as exc:
+            logging.debug("tiktoken unavailable for %s: %s", resolved_model, exc)
+
+        return super().count_tokens(text, model_name)
+
     @abstractmethod
     def get_capabilities(self, model_name: str) -> ModelCapabilities:
         """Get capabilities for a specific model.
@@ -733,13 +709,6 @@ class OpenAICompatibleProvider(ModelProvider):
         Must be implemented by subclasses.
         """
         pass
-
-    def supports_thinking_mode(self, model_name: str) -> bool:
-        """Check if the model supports extended thinking mode.
-
-        Default is False for OpenAI-compatible providers.
-        """
-        return False
 
     def _is_error_retryable(self, error: Exception) -> bool:
         """Determine if an error should be retried based on structured error codes.
@@ -837,12 +806,12 @@ class OpenAICompatibleProvider(ModelProvider):
         try:
             if image_path.startswith("data:"):
                 # Validate the data URL
-                self.validate_image(image_path)
+                validate_image(image_path)
                 # Handle data URL: data:image/png;base64,iVBORw0...
                 return {"type": "image_url", "image_url": {"url": image_path}}
             else:
                 # Use base class validation
-                image_bytes, mime_type = self.validate_image(image_path)
+                image_bytes, mime_type = validate_image(image_path)
 
                 # Read and encode the image
                 import base64

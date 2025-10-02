@@ -11,13 +11,10 @@ if TYPE_CHECKING:
 from google import genai
 from google.genai import types
 
+from utils.image_utils import validate_image
+
 from .base import ModelProvider
-from .shared import (
-    ModelCapabilities,
-    ModelResponse,
-    ProviderType,
-    create_temperature_constraint,
-)
+from .shared import ModelCapabilities, ModelResponse, ProviderType, TemperatureConstraint
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +43,7 @@ class GeminiModelProvider(ModelProvider):
             supports_images=True,  # Vision capability
             max_image_size_mb=32.0,  # Higher limit for Pro model
             supports_temperature=True,
-            temperature_constraint=create_temperature_constraint("range"),
+            temperature_constraint=TemperatureConstraint.create("range"),
             max_thinking_tokens=32768,  # Max thinking tokens for Pro model
             description="Deep reasoning + thinking mode (1M context) - Complex problems, architecture, deep analysis",
             aliases=["pro", "gemini pro", "gemini-pro"],
@@ -65,7 +62,7 @@ class GeminiModelProvider(ModelProvider):
             supports_images=True,  # Vision capability
             max_image_size_mb=20.0,  # Conservative 20MB limit for reliability
             supports_temperature=True,
-            temperature_constraint=create_temperature_constraint("range"),
+            temperature_constraint=TemperatureConstraint.create("range"),
             max_thinking_tokens=24576,  # Same as 2.5 flash for consistency
             description="Gemini 2.0 Flash (1M context) - Latest fast model with experimental thinking, supports audio/video input",
             aliases=["flash-2.0", "flash2"],
@@ -84,7 +81,7 @@ class GeminiModelProvider(ModelProvider):
             supports_images=False,  # Does not support images
             max_image_size_mb=0.0,  # No image support
             supports_temperature=True,
-            temperature_constraint=create_temperature_constraint("range"),
+            temperature_constraint=TemperatureConstraint.create("range"),
             description="Gemini 2.0 Flash Lite (1M context) - Lightweight fast model, text-only",
             aliases=["flashlite", "flash-lite"],
         ),
@@ -102,7 +99,7 @@ class GeminiModelProvider(ModelProvider):
             supports_images=True,  # Vision capability
             max_image_size_mb=20.0,  # Conservative 20MB limit for reliability
             supports_temperature=True,
-            temperature_constraint=create_temperature_constraint("range"),
+            temperature_constraint=TemperatureConstraint.create("range"),
             max_thinking_tokens=24576,  # Flash 2.5 thinking budget limit
             description="Ultra-fast (1M context) - Quick analysis, simple queries, rapid iterations",
             aliases=["flash", "flash2.5"],
@@ -364,15 +361,6 @@ class GeminiModelProvider(ModelProvider):
         error_msg = f"Gemini API error for model {resolved_name} after {actual_attempts} attempt{'s' if actual_attempts > 1 else ''}: {str(last_exception)}"
         raise RuntimeError(error_msg) from last_exception
 
-    def count_tokens(self, text: str, model_name: str) -> int:
-        """Count tokens for the given text using Gemini's tokenizer."""
-        self._resolve_model_name(model_name)
-
-        # For now, use a simple estimation
-        # TODO: Use actual Gemini tokenizer when available in SDK
-        # Rough estimation: ~4 characters per token for English text
-        return len(text) // 4
-
     def get_provider_type(self) -> ProviderType:
         """Get the provider type."""
         return ProviderType.GOOGLE
@@ -396,11 +384,6 @@ class GeminiModelProvider(ModelProvider):
             return False
 
         return True
-
-    def supports_thinking_mode(self, model_name: str) -> bool:
-        """Check if the model supports extended thinking mode."""
-        capabilities = self.get_capabilities(model_name)
-        return capabilities.supports_extended_thinking
 
     def get_thinking_budget(self, model_name: str, thinking_mode: str) -> int:
         """Get actual thinking token budget for a model and thinking mode."""
@@ -539,7 +522,7 @@ class GeminiModelProvider(ModelProvider):
         """Process an image for Gemini API."""
         try:
             # Use base class validation
-            image_bytes, mime_type = self.validate_image(image_path)
+            image_bytes, mime_type = validate_image(image_path)
 
             # For data URLs, extract the base64 data directly
             if image_path.startswith("data:"):
