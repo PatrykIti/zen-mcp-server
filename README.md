@@ -3,20 +3,28 @@
 [zen_web.webm](https://github.com/user-attachments/assets/851e3911-7f06-47c0-a4ab-a2601236697c)
 
 <div align="center">
-  <b>🤖 <a href="https://www.anthropic.com/claude-code">Claude Code</a> OR <a href="https://github.com/google-gemini/gemini-cli">Gemini CLI</a> OR <a href="https://github.com/openai/codex">Codex CLI</a> + [Gemini / OpenAI / Grok / OpenRouter / DIAL / Ollama / Anthropic / Any Model] = Your Ultimate AI Development Team</b>
+  <b>🤖 <a href="https://www.anthropic.com/claude-code">Claude Code</a> OR <a href="https://github.com/google-gemini/gemini-cli">Gemini CLI</a> OR <a href="https://github.com/openai/codex">Codex CLI</a> + [Gemini / OpenAI / Azure / Grok / OpenRouter / DIAL / Ollama / Anthropic / Any Model] = Your Ultimate AI Development Team</b>
 </div>
 
 <br/>
 
-**AI orchestration for Claude Code** - A Model Context Protocol server that gives your CLI of choice (e.g. [Claude Code](https://www.anthropic.com/claude-code)) access to multiple AI models for enhanced code analysis, problem-solving, and collaborative development. Zen
-works with Claude Code, Gemini CLI, Codex CLI, and IDE clients like [Cursor](https://cursor.com) and the [Claude Dev extension for VS Code](https://marketplace.visualstudio.com/items?itemName=Anthropic.claude-vscode).
+**Why rely on one AI model when you can use them all?**
 
-**True AI collaboration with conversation continuity** - Claude stays in control but gets perspectives from the best AI for each subtask. Context carries forward seamlessly across tools and models, enabling complex workflows like: code reviews with multiple models → automated planning → implementation → pre-commit validation.
+A Model Context Protocol server that supercharges tools like [Claude Code](https://www.anthropic.com/claude-code), [Codex CLI](https://developers.openai.com/codex/cli), and IDE clients such 
+as [Cursor](https://cursor.com) or the [Claude Dev VS Code extension](https://marketplace.visualstudio.com/items?itemName=Anthropic.claude-vscode). **Zen MCP connects your favorite AI tool 
+to multiple AI models** for enhanced code analysis, problem-solving, and collaborative development.
 
-> **You're in control.** Claude orchestrates the AI team, but you decide the workflow. Craft powerful prompts that bring in Gemini Pro, GPT 5, Flash, or local offline models exactly when needed.
+**True AI collaboration with conversation continuity** - Zen supports **conversation threading** so your 
+CLI can **discuss ideas with multiple AI models, exchange reasoning, get second opinions, and even run collaborative debates between models** to help you reach deeper insights and better solutions. 
+
+Your CLI always stays in control but gets perspectives from the best AI for each subtask. Context carries forward seamlessly across tools and models, enabling complex workflows like: code reviews with multiple models → automated planning → implementation → pre-commit validation.
+
+> **You're in control.** Your CLI of choice orchestrates the AI team, but you decide the workflow. Craft powerful prompts that bring in Gemini Pro, GPT 5, Flash, or local offline models exactly when needed.
 
 <details>
 <summary><b>Reasons to Use Zen MCP</b></summary>
+
+A typical workflow with Claude Code as an example:
 
 1. **Multi-Model Orchestration** - Claude coordinates with Gemini Pro, O3, GPT-5, and 50+ other models to get the best analysis for each task
 
@@ -68,13 +76,26 @@ and review into consideration to aid with its final pre-commit review.
 > **You're** the one who crafts the powerful prompt that makes Claude bring in Gemini, Flash, O3 — or fly solo.
 > You're the guide. The prompter. The puppeteer.
 > #### You are the AI - **Actually Intelligent**.
+</details>
 
 #### Recommended AI Stack
 
-For best results, use Claude Code with:
-- **Opus 4.1** - All agentic work and orchestration
-- **Gemini 2.5 Pro** - Deep thinking, code reviews, debugging, pre-commit analysis
+<details>
+<summary>For Claude Code Users</summary>
 
+For best results when using [Claude Code](https://claude.ai/code):  
+
+- **Sonnet 4.5** - All agentic work and orchestration
+- **Gemini 2.5 Pro** - Deep thinking, additional code reviews, debugging and validations, pre-commit analysis
+</details>
+
+<details>
+<summary>For Codex Users</summary>
+
+For best results when using [Codex CLI](https://developers.openai.com/codex/cli):  
+
+- **GPT-5 Codex Medium** - All agentic work and orchestration
+- **Gemini 2.5 Pro** - Deep thinking, additional code reviews, debugging and validations, pre-commit analysis
 </details>
 
 ## Quick Start (5 minutes)
@@ -85,6 +106,7 @@ For best results, use Claude Code with:
 - **[OpenRouter](https://openrouter.ai/)** - Access multiple models with one API
 - **[Gemini](https://makersuite.google.com/app/apikey)** - Google's latest models
 - **[OpenAI](https://platform.openai.com/api-keys)** - O3, GPT-5 series
+- **[Azure OpenAI](https://learn.microsoft.com/azure/ai-services/openai/)** - Enterprise deployments of GPT-4o, GPT-4.1, GPT-5 family
 - **[X.AI](https://console.x.ai/)** - Grok models
 - **[DIAL](https://dialx.ai/)** - Vendor-agnostic model access
 - **[Ollama](https://ollama.ai/)** - Local models (free)
@@ -131,6 +153,10 @@ cd zen-mcp-server
 
 👉 **[Complete Setup Guide](docs/getting-started.md)** with detailed installation, configuration for Gemini / Codex, and troubleshooting  
 👉 **[Cursor & VS Code Setup](docs/getting-started.md#ide-clients)** for IDE integration instructions
+
+## Provider Configuration
+
+Zen activates any provider that has credentials in your `.env`. See `.env.example` for deeper customization.
 
 ## Core Tools
 
@@ -247,7 +273,7 @@ DISABLED_TOOLS=
 - **[Context revival](docs/context-revival.md)** - Continue conversations even after context resets
 
 **Model Support**
-- **Multiple providers** - Gemini, OpenAI, X.AI, OpenRouter, DIAL, Ollama
+- **Multiple providers** - Gemini, OpenAI, Azure, X.AI, OpenRouter, DIAL, Ollama
 - **Latest models** - GPT-5, Gemini 2.5 Pro, O3, Grok-4, local Llama
 - **[Thinking modes](docs/advanced-usage.md#thinking-modes)** - Control reasoning depth vs cost
 - **Vision support** - Analyze images, diagrams, screenshots
@@ -288,6 +314,7 @@ DISABLED_TOOLS=
 - [Tools Reference](docs/tools/) - All tools with examples
 - [Advanced Usage](docs/advanced-usage.md) - Power user features
 - [Configuration](docs/configuration.md) - Environment variables, restrictions
+- [Adding Providers](docs/adding_providers.md) - Provider-specific setup (OpenAI, Azure, custom gateways)
 - [Model Ranking Guide](docs/model_ranking.md) - How intelligence scores drive auto-mode suggestions
 
 **🔧 Setup & Support**
@@ -303,10 +330,12 @@ Apache 2.0 License - see [LICENSE](LICENSE) file for details.
 
 Built with the power of **Multi-Model AI** collaboration 🤝
 - **A**ctual **I**ntelligence by real Humans
-- [MCP (Model Context Protocol)](https://modelcontextprotocol.com) by Anthropic
-- [Claude Code](https://claude.ai/code) - Your AI coding orchestrator
-- [Gemini 2.5 Pro & Flash](https://ai.google.dev/) - Extended thinking & fast analysis
-- [OpenAI O3 & GPT-5](https://openai.com/) - Strong reasoning & latest capabilities
+- [MCP (Model Context Protocol)](https://modelcontextprotocol.com)
+- [Codex CLI](https://developers.openai.com/codex/cli)
+- [Claude Code](https://claude.ai/code)
+- [Gemini](https://ai.google.dev/)
+- [OpenAI](https://openai.com/)
+- [Azure OpenAI](https://learn.microsoft.com/azure/ai-services/openai/)
 
 ### Star History
 
