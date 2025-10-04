@@ -1,8 +1,9 @@
 """Model provider registry for managing available providers."""
 
 import logging
-import os
 from typing import TYPE_CHECKING, Optional
+
+from utils.env import get_env
 
 from .base import ModelProvider
 from .shared import ProviderType
@@ -102,7 +103,7 @@ class ModelProviderRegistry:
                 provider = provider_class(api_key=api_key)
             else:
                 # Regular class - need to handle URL requirement
-                custom_url = os.getenv("CUSTOM_API_URL", "")
+                custom_url = get_env("CUSTOM_API_URL", "") or ""
                 if not custom_url:
                     if api_key:  # Key is set but URL is missing
                         logging.warning("CUSTOM_API_KEY set but CUSTOM_API_URL missing – skipping Custom provider")
@@ -116,7 +117,7 @@ class ModelProviderRegistry:
             # For Gemini, check if custom base URL is configured
             if not api_key:
                 return None
-            gemini_base_url = os.getenv("GEMINI_BASE_URL")
+            gemini_base_url = get_env("GEMINI_BASE_URL")
             provider_kwargs = {"api_key": api_key}
             if gemini_base_url:
                 provider_kwargs["base_url"] = gemini_base_url
@@ -205,6 +206,18 @@ class ModelProviderRegistry:
                 logging.warning("Provider %s does not implement list_models", provider_type)
                 continue
 
+            if restriction_service and restriction_service.has_restrictions(provider_type):
+                restricted_display = cls._collect_restricted_display_names(
+                    provider,
+                    provider_type,
+                    available,
+                    restriction_service,
+                )
+                if restricted_display:
+                    for model_name in restricted_display:
+                        models[model_name] = provider_type
+                    continue
+
             for model_name in available:
                 # =====================================================================================
                 # CRITICAL: Prevent double restriction filtering (Fixed Issue #98)
@@ -226,6 +239,50 @@ class ModelProviderRegistry:
                 models[model_name] = provider_type
 
         return models
+
+    @classmethod
+    def _collect_restricted_display_names(
+        cls,
+        provider: ModelProvider,
+        provider_type: ProviderType,
+        available: list[str],
+        restriction_service,
+    ) -> list[str] | None:
+        """Derive the human-facing model list when restrictions are active."""
+
+        allowed_models = restriction_service.get_allowed_models(provider_type)
+        if not allowed_models:
+            return None
+
+        allowed_details: list[tuple[str, int]] = []
+
+        for model_name in sorted(allowed_models):
+            try:
+                capabilities = provider.get_capabilities(model_name)
+            except (AttributeError, ValueError):
+                continue
+
+            try:
+                rank = capabilities.get_effective_capability_rank()
+                rank_value = float(rank)
+            except (AttributeError, TypeError, ValueError):
+                rank_value = 0.0
+
+            allowed_details.append((model_name, rank_value))
+
+        if allowed_details:
+            allowed_details.sort(key=lambda item: (-item[1], item[0]))
+            return [name for name, _ in allowed_details]
+
+        # Fallback: intersect the allowlist with the provider-advertised names.
+        available_lookup = {name.lower(): name for name in available}
+        display_names: list[str] = []
+        for model_name in sorted(allowed_models):
+            lowered = model_name.lower()
+            if lowered in available_lookup:
+                display_names.append(available_lookup[lowered])
+
+        return display_names
 
     @classmethod
     def get_available_model_names(cls, provider_type: Optional[ProviderType] = None) -> list[str]:
@@ -271,7 +328,7 @@ class ModelProviderRegistry:
         if not env_var:
             return None
 
-        return os.getenv(env_var)
+        return get_env(env_var)
 
     @classmethod
     def _get_allowed_models_for_provider(cls, provider: ModelProvider, provider_type: ProviderType) -> list[str]:
