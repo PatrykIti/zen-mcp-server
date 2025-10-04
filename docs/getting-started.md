@@ -147,6 +147,56 @@ PATH = "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:$HOME/.local/bin:$HOME/.c
 GEMINI_API_KEY = "your_api_key_here"
 ```
 
+
+**For Qwen Code CLI:**
+Create or edit `~/.qwen/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "zen": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "for p in $(which uvx 2>/dev/null) $HOME/.local/bin/uvx /opt/homebrew/bin/uvx /usr/local/bin/uvx uvx; do [ -x \"$p\" ] && exec \"$p\" --from git+https://github.com/BeehiveInnovations/zen-mcp-server.git zen-mcp-server; done; echo 'uvx not found' >&2; exit 1"
+      ],
+      "cwd": "/path/to/zen-mcp-server",
+      "env": {
+        "PATH": "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:~/.local/bin",
+        "GEMINI_API_KEY": "your_api_key_here"
+      }
+    }
+  }
+}
+```
+
+Replace the placeholder API key with the providers you use (Gemini, OpenAI, OpenRouter, etc.).
+
+**For OpenCode CLI:**
+Edit `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "zen": {
+      "type": "local",
+      "command": [
+        "/path/to/zen-mcp-server/.zen_venv/bin/python",
+        "/path/to/zen-mcp-server/server.py"
+      ],
+      "cwd": "/path/to/zen-mcp-server",
+      "enabled": true,
+      "environment": {
+        "GEMINI_API_KEY": "your_api_key_here"
+      }
+    }
+  }
+}
+```
+
+Add any other API keys you rely on (`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, etc.).
+
 #### IDE Clients (Cursor & VS Code)
 
 Zen works in GUI IDEs that speak MCP. The configuration mirrors the CLI examples above—point the client at the `uvx` launcher and set any required environment variables.
@@ -262,6 +312,16 @@ CUSTOM_MODEL_NAME=llama3.2                   # Default model name
 
 ### For Gemini CLI:
 **Note**: While Zen MCP connects to Gemini CLI, tool invocation isn't working correctly yet. See [Gemini CLI Setup](gemini-setup.md) for updates.
+
+### For Qwen Code CLI:
+1. Restart the Qwen Code CLI if it's running (`qwen exit`).
+2. Run `qwen mcp list --scope user` and confirm `zen` shows `CONNECTED`.
+3. Try: `"/mcp"` to inspect available tools or `"Use zen to analyze this repo"`.
+
+### For OpenCode CLI:
+1. Restart OpenCode (or run `OpenCode: Reload Config`).
+2. Open **Settings › Tools › MCP** and confirm `zen` is enabled.
+3. Start a new chat and try: `"Use zen to list available models"`.
 
 ### For Codex CLI:
 1. Restart Codex CLI if running
