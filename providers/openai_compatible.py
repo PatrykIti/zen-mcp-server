@@ -3,12 +3,12 @@
 import copy
 import ipaddress
 import logging
-import os
 from typing import Optional
 from urllib.parse import urlparse
 
 from openai import OpenAI
 
+from utils.env import get_env
 from utils.image_utils import validate_image
 
 from .base import ModelProvider
@@ -39,6 +39,7 @@ class OpenAICompatibleProvider(ModelProvider):
             base_url: Base URL for the API endpoint
             **kwargs: Additional configuration options including timeout
         """
+        self._allowed_alias_cache: dict[str, str] = {}
         super().__init__(api_key, **kwargs)
         self._client = None
         self.base_url = base_url
@@ -74,9 +75,33 @@ class OpenAICompatibleProvider(ModelProvider):
             canonical = canonical_name.lower()
 
             if requested not in self.allowed_models and canonical not in self.allowed_models:
-                raise ValueError(
-                    f"Model '{requested_name}' is not allowed by restriction policy. Allowed models: {sorted(self.allowed_models)}"
-                )
+                allowed = False
+                for allowed_entry in list(self.allowed_models):
+                    normalized_resolved = self._allowed_alias_cache.get(allowed_entry)
+                    if normalized_resolved is None:
+                        try:
+                            resolved_name = self._resolve_model_name(allowed_entry)
+                        except Exception:
+                            continue
+
+                        if not resolved_name:
+                            continue
+
+                        normalized_resolved = resolved_name.lower()
+                        self._allowed_alias_cache[allowed_entry] = normalized_resolved
+
+                    if normalized_resolved == canonical:
+                        # Canonical match discovered via alias resolution – mark as allowed and
+                        # memoise the canonical entry for future lookups.
+                        allowed = True
+                        self._allowed_alias_cache[canonical] = canonical
+                        self.allowed_models.add(canonical)
+                        break
+
+                if not allowed:
+                    raise ValueError(
+                        f"Model '{requested_name}' is not allowed by restriction policy. Allowed models: {sorted(self.allowed_models)}"
+                    )
 
     def _parse_allowed_models(self) -> Optional[set[str]]:
         """Parse allowed models from environment variable.
@@ -87,13 +112,14 @@ class OpenAICompatibleProvider(ModelProvider):
         # Get provider-specific allowed models
         provider_type = self.get_provider_type().value.upper()
         env_var = f"{provider_type}_ALLOWED_MODELS"
-        models_str = os.getenv(env_var, "")
+        models_str = get_env(env_var, "") or ""
 
         if models_str:
             # Parse and normalize to lowercase for case-insensitive comparison
             models = {m.strip().lower() for m in models_str.split(",") if m.strip()}
             if models:
                 logging.info(f"Configured allowed models for {self.FRIENDLY_NAME}: {sorted(models)}")
+                self._allowed_alias_cache = {}
                 return models
 
         # Log info if no allow-list configured for proxy providers
@@ -139,10 +165,25 @@ class OpenAICompatibleProvider(ModelProvider):
             logging.info(f"Using extended timeouts for custom endpoint: {self.base_url}")
 
         # Allow override via kwargs or environment variables in future, for now...
-        connect_timeout = kwargs.get("connect_timeout", float(os.getenv("CUSTOM_CONNECT_TIMEOUT", default_connect)))
-        read_timeout = kwargs.get("read_timeout", float(os.getenv("CUSTOM_READ_TIMEOUT", default_read)))
-        write_timeout = kwargs.get("write_timeout", float(os.getenv("CUSTOM_WRITE_TIMEOUT", default_write)))
-        pool_timeout = kwargs.get("pool_timeout", float(os.getenv("CUSTOM_POOL_TIMEOUT", default_pool)))
+        connect_timeout = kwargs.get("connect_timeout")
+        if connect_timeout is None:
+            connect_timeout_raw = get_env("CUSTOM_CONNECT_TIMEOUT")
+            connect_timeout = float(connect_timeout_raw) if connect_timeout_raw is not None else float(default_connect)
+
+        read_timeout = kwargs.get("read_timeout")
+        if read_timeout is None:
+            read_timeout_raw = get_env("CUSTOM_READ_TIMEOUT")
+            read_timeout = float(read_timeout_raw) if read_timeout_raw is not None else float(default_read)
+
+        write_timeout = kwargs.get("write_timeout")
+        if write_timeout is None:
+            write_timeout_raw = get_env("CUSTOM_WRITE_TIMEOUT")
+            write_timeout = float(write_timeout_raw) if write_timeout_raw is not None else float(default_write)
+
+        pool_timeout = kwargs.get("pool_timeout")
+        if pool_timeout is None:
+            pool_timeout_raw = get_env("CUSTOM_POOL_TIMEOUT")
+            pool_timeout = float(pool_timeout_raw) if pool_timeout_raw is not None else float(default_pool)
 
         timeout = httpx.Timeout(connect=connect_timeout, read=read_timeout, write=write_timeout, pool=pool_timeout)
 
