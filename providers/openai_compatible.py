@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 from openai import OpenAI
 
-from utils.env import get_env
+from utils.env import get_env, suppress_env_vars
 from utils.image_utils import validate_image
 
 from .base import ModelProvider
@@ -257,80 +257,74 @@ class OpenAICompatibleProvider(ModelProvider):
     def client(self):
         """Lazy initialization of OpenAI client with security checks and timeout configuration."""
         if self._client is None:
-            import os
-
             import httpx
 
-            # Temporarily disable proxy environment variables to prevent httpx from detecting them
-            original_env = {}
             proxy_env_vars = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]
 
-            for var in proxy_env_vars:
-                if var in os.environ:
-                    original_env[var] = os.environ[var]
-                    del os.environ[var]
-
-            try:
-                # Create a custom httpx client that explicitly avoids proxy parameters
-                timeout_config = (
-                    self.timeout_config
-                    if hasattr(self, "timeout_config") and self.timeout_config
-                    else httpx.Timeout(30.0)
-                )
-
-                # Create httpx client with minimal config to avoid proxy conflicts
-                # Note: proxies parameter was removed in httpx 0.28.0
-                # Check for test transport injection
-                if hasattr(self, "_test_transport"):
-                    # Use custom transport for testing (HTTP recording/replay)
-                    http_client = httpx.Client(
-                        transport=self._test_transport,
-                        timeout=timeout_config,
-                        follow_redirects=True,
-                    )
-                else:
-                    # Normal production client
-                    http_client = httpx.Client(
-                        timeout=timeout_config,
-                        follow_redirects=True,
-                    )
-
-                # Keep client initialization minimal to avoid proxy parameter conflicts
-                client_kwargs = {
-                    "api_key": self.api_key,
-                    "http_client": http_client,
-                }
-
-                if self.base_url:
-                    client_kwargs["base_url"] = self.base_url
-
-                if self.organization:
-                    client_kwargs["organization"] = self.organization
-
-                # Add default headers if any
-                if self.DEFAULT_HEADERS:
-                    client_kwargs["default_headers"] = self.DEFAULT_HEADERS.copy()
-
-                logging.debug(f"OpenAI client initialized with custom httpx client and timeout: {timeout_config}")
-
-                # Create OpenAI client with custom httpx client
-                self._client = OpenAI(**client_kwargs)
-
-            except Exception as e:
-                # If all else fails, try absolute minimal client without custom httpx
-                logging.warning(f"Failed to create client with custom httpx, falling back to minimal config: {e}")
+            with suppress_env_vars(*proxy_env_vars):
                 try:
-                    minimal_kwargs = {"api_key": self.api_key}
+                    # Create a custom httpx client that explicitly avoids proxy parameters
+                    timeout_config = (
+                        self.timeout_config
+                        if hasattr(self, "timeout_config") and self.timeout_config
+                        else httpx.Timeout(30.0)
+                    )
+
+                    # Create httpx client with minimal config to avoid proxy conflicts
+                    # Note: proxies parameter was removed in httpx 0.28.0
+                    # Check for test transport injection
+                    if hasattr(self, "_test_transport"):
+                        # Use custom transport for testing (HTTP recording/replay)
+                        http_client = httpx.Client(
+                            transport=self._test_transport,
+                            timeout=timeout_config,
+                            follow_redirects=True,
+                        )
+                    else:
+                        # Normal production client
+                        http_client = httpx.Client(
+                            timeout=timeout_config,
+                            follow_redirects=True,
+                        )
+
+                    # Keep client initialization minimal to avoid proxy parameter conflicts
+                    client_kwargs = {
+                        "api_key": self.api_key,
+                        "http_client": http_client,
+                    }
+
                     if self.base_url:
-                        minimal_kwargs["base_url"] = self.base_url
-                    self._client = OpenAI(**minimal_kwargs)
-                except Exception as fallback_error:
-                    logging.error(f"Even minimal OpenAI client creation failed: {fallback_error}")
-                    raise
-            finally:
-                # Restore original proxy environment variables
-                for var, value in original_env.items():
-                    os.environ[var] = value
+                        client_kwargs["base_url"] = self.base_url
+
+                    if self.organization:
+                        client_kwargs["organization"] = self.organization
+
+                    # Add default headers if any
+                    if self.DEFAULT_HEADERS:
+                        client_kwargs["default_headers"] = self.DEFAULT_HEADERS.copy()
+
+                    logging.debug(
+                        "OpenAI client initialized with custom httpx client and timeout: %s",
+                        timeout_config,
+                    )
+
+                    # Create OpenAI client with custom httpx client
+                    self._client = OpenAI(**client_kwargs)
+
+                except Exception as e:
+                    # If all else fails, try absolute minimal client without custom httpx
+                    logging.warning(
+                        "Failed to create client with custom httpx, falling back to minimal config: %s",
+                        e,
+                    )
+                    try:
+                        minimal_kwargs = {"api_key": self.api_key}
+                        if self.base_url:
+                            minimal_kwargs["base_url"] = self.base_url
+                        self._client = OpenAI(**minimal_kwargs)
+                    except Exception as fallback_error:
+                        logging.error("Even minimal OpenAI client creation failed: %s", fallback_error)
+                        raise
 
         return self._client
 
@@ -603,8 +597,16 @@ class OpenAICompatibleProvider(ModelProvider):
                 completion_params[key] = value
 
         # Check if this model needs the Responses API endpoint
-        # Both o3-pro and gpt-5-codex use the new Responses API
-        if resolved_model in ["o3-pro", "gpt-5-codex"]:
+        # Prefer capability metadata; fall back to static map when capabilities unavailable
+        use_responses_api = False
+        if capabilities is not None:
+            use_responses_api = getattr(capabilities, "use_openai_response_api", False)
+        else:
+            static_capabilities = self.get_all_model_capabilities().get(resolved_model)
+            if static_capabilities is not None:
+                use_responses_api = getattr(static_capabilities, "use_openai_response_api", False)
+
+        if use_responses_api:
             # These models require the /v1/responses endpoint for stateful context
             # If it fails, we should not fall back to chat/completions
             return self._generate_with_responses_endpoint(

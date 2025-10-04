@@ -50,10 +50,10 @@ class ModelCapabilities:
     supports_images: bool = False
     supports_json_mode: bool = False
     supports_temperature: bool = True
+    use_openai_response_api: bool = False
 
     # Additional attributes
     max_image_size_mb: float = 0.0
-    is_custom: bool = False
     temperature_constraint: TemperatureConstraint = field(
         default_factory=lambda: RangeTemperatureConstraint(0.0, 2.0, 0.3)
     )
@@ -101,9 +101,6 @@ class ModelCapabilities:
             score += 1
         if self.supports_images:
             score += 1
-
-        if self.is_custom:
-            score -= 1
 
         return max(0, min(100, score))
 
