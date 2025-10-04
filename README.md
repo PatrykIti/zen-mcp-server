@@ -3,7 +3,15 @@
 [zen_web.webm](https://github.com/user-attachments/assets/851e3911-7f06-47c0-a4ab-a2601236697c)
 
 <div align="center">
-  <b>🤖 <a href="https://www.anthropic.com/claude-code">Claude Code</a> OR <a href="https://github.com/google-gemini/gemini-cli">Gemini CLI</a> OR <a href="https://github.com/openai/codex">Codex CLI</a> + [Gemini / OpenAI / Azure / Grok / OpenRouter / DIAL / Ollama / Anthropic / Any Model] = Your Ultimate AI Development Team</b>
+
+### Your CLI + Multiple Models = Your AI Dev Team
+
+**Use the 🤖 CLI you love:**  
+[Claude Code](https://www.anthropic.com/claude-code) · [Gemini CLI](https://github.com/google-gemini/gemini-cli) · [Codex CLI](https://github.com/openai/codex) · [Qwen Code CLI](https://qwenlm.github.io/qwen-code-docs/) · _and more_
+
+**With multiple models:**  
+Gemini · OpenAI · Anthropic · Grok · Azure · Ollama · OpenRouter · DIAL · On-Device Model
+
 </div>
 
 <br/>
@@ -119,7 +127,7 @@ git clone https://github.com/BeehiveInnovations/zen-mcp-server.git
 cd zen-mcp-server
 
 # Handles everything: setup, config, API keys from system environment. 
-# Auto-configures Claude Desktop, Claude Code, Gemini CLI, Codex CLI
+# Auto-configures Claude Desktop, Claude Code, Gemini CLI, Codex CLI, Qwen CLI
 # Enable / disable additional settings in .env
 ./run-server.sh  
 ```
@@ -151,7 +159,7 @@ cd zen-mcp-server
 "Plan the migration strategy with zen, get consensus from multiple models"
 ```
 
-👉 **[Complete Setup Guide](docs/getting-started.md)** with detailed installation, configuration for Gemini / Codex, and troubleshooting  
+👉 **[Complete Setup Guide](docs/getting-started.md)** with detailed installation, configuration for Gemini / Codex / Qwen, and troubleshooting  
 👉 **[Cursor & VS Code Setup](docs/getting-started.md#ide-clients)** for IDE integration instructions
 
 ## Provider Configuration
