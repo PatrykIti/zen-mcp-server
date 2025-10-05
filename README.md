@@ -2,7 +2,7 @@
 
 <div align="center">
 
-[zen_web.webm](https://github.com/user-attachments/assets/851e3911-7f06-47c0-a4ab-a2601236697c)
+  [Zen in action](https://github.com/user-attachments/assets/0d26061e-5f21-4ab1-b7d0-f883ddc2c3da)
 
 ### Your CLI + Multiple Models = Your AI Dev Team
 
