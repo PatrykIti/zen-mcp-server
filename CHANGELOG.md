@@ -2,6 +2,45 @@
 
 <!-- version list -->
 
+## v7.7.0 (2025-10-07)
+
+### Chores
+
+- Sync version to config.py [skip ci]
+  ([`70ae62a`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/70ae62a2cd663c3abcabddd1be1bc6ed9512d7df))
+
+### Documentation
+
+- Video
+  ([`ed5dda7`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/ed5dda7c5a9439c2835cc69d76e6377169ad048a))
+
+### Features
+
+- More aliases
+  ([`5f0aaf5`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/5f0aaf5f69c9d188d817b5ffbf6738c61da40ec7))
+
+
+## v7.6.0 (2025-10-07)
+
+### Chores
+
+- Sync version to config.py [skip ci]
+  ([`c1c75ba`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/c1c75ba304c2840329650c46273e87eab9b05906))
+
+- Sync version to config.py [skip ci]
+  ([`0fa9b66`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/0fa9b6658099c8e0d79fda0c7d2347f62d0e6137))
+
+### Documentation
+
+- Info about AI client timeouts
+  ([`3ddfed5`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/3ddfed5ef09000791e1c94b041c43dc273ed53a8))
+
+### Features
+
+- Add support for openai/gpt-5-pro model
+  ([`abed075`](https://github.com/BeehiveInnovations/zen-mcp-server/commit/abed075b2eaa99e9618202f47ff921094baae952))
+
+
 ## v7.5.2 (2025-10-06)
 
 ### Bug Fixes
