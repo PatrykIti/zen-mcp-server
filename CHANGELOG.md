@@ -2,6 +2,45 @@
 
 <!-- version list -->
 
+## v9.8.1 (2025-12-15)
+
+### Bug Fixes
+
+- **providers**: Omit store parameter for OpenRouter responses endpoint
+  ([`1f8b58d`](https://github.com/BeehiveInnovations/pal-mcp-server/commit/1f8b58d607c2809b9fa78860718a69207cb66e32))
+
+### Chores
+
+- Sync version to config.py [skip ci]
+  ([`69a42a7`](https://github.com/BeehiveInnovations/pal-mcp-server/commit/69a42a71d19d66f1d94d51fa27db29323e3d9a63))
+
+### Refactoring
+
+- **tests**: Address code review feedback
+  ([`0c3e63c`](https://github.com/BeehiveInnovations/pal-mcp-server/commit/0c3e63c0c7f1556f4b6686f9c6f30e4bb4a48c7c))
+
+- **tests**: Remove unused setUp method
+  ([`b6a8d68`](https://github.com/BeehiveInnovations/pal-mcp-server/commit/b6a8d682d920c2283724b588818bc1162a865d74))
+
+
+## v9.8.0 (2025-12-15)
+
+### Chores
+
+- Sync version to config.py [skip ci]
+  ([`cb97a89`](https://github.com/BeehiveInnovations/pal-mcp-server/commit/cb97a891dec6ab7c56b8b35c277ab3680af384d9))
+
+### Features
+
+- Add Claude Opus 4.5 model via OpenRouter
+  ([`813ce5c`](https://github.com/BeehiveInnovations/pal-mcp-server/commit/813ce5c9f7db2910eb12d8c84d3d99f464c430ed))
+
+### Testing
+
+- Add comprehensive test coverage for Opus 4.5 aliases
+  ([`cf63fd2`](https://github.com/BeehiveInnovations/pal-mcp-server/commit/cf63fd25440d599f2ec006bb8cfda5b8a6f61524))
+
+
 ## v9.7.0 (2025-12-15)
 
 ### Chores
