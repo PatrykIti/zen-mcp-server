@@ -2,6 +2,32 @@
 
 <!-- version list -->
 
+## v9.7.0 (2025-12-15)
+
+### Chores
+
+- Sync version to config.py [skip ci]
+  ([`aa85644`](https://github.com/BeehiveInnovations/pal-mcp-server/commit/aa85644c9b15893443107c3a62ec58cd7b9dc532))
+
+### Features
+
+- Re-enable web search for clink codex using correct --enable flag
+  ([`e7b9f3a`](https://github.com/BeehiveInnovations/pal-mcp-server/commit/e7b9f3a5d7e06c690c82b9fd13a93310bcf388ed))
+
+
+## v9.6.0 (2025-12-15)
+
+### Chores
+
+- Sync version to config.py [skip ci]
+  ([`94ff26c`](https://github.com/BeehiveInnovations/pal-mcp-server/commit/94ff26c673a64087eb29f8f54c1828f1157c594a))
+
+### Features
+
+- Support native installed Claude CLI detection
+  ([`adc6231`](https://github.com/BeehiveInnovations/pal-mcp-server/commit/adc6231b98886f0bc35cb04d04d948eba2f0f058))
+
+
 ## v9.5.0 (2025-12-11)
 
 ### Bug Fixes
